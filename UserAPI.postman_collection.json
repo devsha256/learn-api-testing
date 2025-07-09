@@ -1,0 +1,85 @@
+{
+  "info": {
+    "name": "User API",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_postman_id": "b2f6bbd0-1234-4fc2-aaaa-collectionid"
+  },
+  "item": [
+    {
+      "name": "Create User - Valid",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": { "raw": "{{base_url}}/users", "host": ["{{base_url}}"], "path": ["users"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"name\": \"Alice\", \"email\": \"alice@example.com\"}"
+        }
+      }
+    },
+    {
+      "name": "Create User - Duplicate Email",
+      "request": {
+        "method": "POST",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": { "raw": "{{base_url}}/users", "host": ["{{base_url}}"], "path": ["users"] },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"name\": \"Alice Clone\", \"email\": \"alice@example.com\"}"
+        }
+      }
+    },
+    {
+      "name": "Get All Users",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/users", "host": ["{{base_url}}"], "path": ["users"] }
+      }
+    },
+    {
+      "name": "Get User by ID",
+      "request": {
+        "method": "GET",
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}"]
+        }
+      }
+    },
+    {
+      "name": "Update User",
+      "request": {
+        "method": "PUT",
+        "header": [{"key": "Content-Type", "value": "application/json"}],
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}"]
+        },
+        "body": {
+          "mode": "raw",
+          "raw": "{\"name\": \"Alice Updated\", \"email\": \"alice.updated@example.com\"}"
+        }
+      }
+    },
+    {
+      "name": "Delete User",
+      "request": {
+        "method": "DELETE",
+        "url": {
+          "raw": "{{base_url}}/users/{{user_id}}",
+          "host": ["{{base_url}}"],
+          "path": ["users", "{{user_id}}"]
+        }
+      }
+    },
+    {
+      "name": "OpenAPI Spec",
+      "request": {
+        "method": "GET",
+        "url": { "raw": "{{base_url}}/openapi.json", "host": ["{{base_url}}"], "path": ["openapi.json"] }
+      }
+    }
+  ]
+}
