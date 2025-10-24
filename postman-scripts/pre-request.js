@@ -7,54 +7,60 @@ const urlObj = currentRequest.url;
 const muleBaseUrl = pm.collectionVariables.get("mule_base_url");
 const boomiBaseUrl = pm.collectionVariables.get("boomi_base_url");
 
-// Parse MuleSoft URL to extract components
+// Get the full MuleSoft URL as string
 const fullMuleUrl = urlObj.toString();
 console.log("Full MuleSoft URL:", fullMuleUrl);
 
-// Strategy: Extract everything after the base URL and remove app-env-name
+// Parse URL using string manipulation (Postman-compatible)
 function transformMuleUrlToBoomi(muleUrl, muleBase, boomiBase) {
     try {
-        // Parse the MuleSoft URL
-        const muleUrlObj = new URL(muleUrl);
-        const muleBaseObj = new URL(muleBase);
+        console.log("Input - MuleSoft URL:", muleUrl);
+        console.log("Input - MuleSoft Base:", muleBase);
+        console.log("Input - Boomi Base:", boomiBase);
         
-        // Get the path after the base URL
-        let fullPath = muleUrlObj.pathname;
+        // Extract the path portion after mule base URL
+        let pathAfterBase = muleUrl.replace(muleBase, '');
         
-        // Remove the base path from MuleSoft base URL if it exists
-        const muleBasePath = muleBaseObj.pathname;
-        if (fullPath.startsWith(muleBasePath)) {
-            fullPath = fullPath.substring(muleBasePath.length);
+        // Handle case where base URL has trailing slash
+        if (pathAfterBase.startsWith('/')) {
+            pathAfterBase = pathAfterBase.substring(1);
         }
+        
+        console.log("Path after base:", pathAfterBase);
+        
+        // Split by '?' to separate path from query string
+        const urlParts = pathAfterBase.split('?');
+        const pathPart = urlParts[0];
+        const queryPart = urlParts.length > 1 ? '?' + urlParts[1] : '';
+        
+        console.log("Path part:", pathPart);
+        console.log("Query part:", queryPart);
         
         // Split path into segments
-        // Example: /app-env-name/ws/rest/service -> ['app-env-name', 'ws', 'rest', 'service']
-        const pathSegments = fullPath.split('/').filter(segment => segment.length > 0);
-        
+        const pathSegments = pathPart.split('/').filter(segment => segment.length > 0);
         console.log("Path segments:", pathSegments);
         
-        // Remove the first segment (app-env-name) if it exists
-        // Pattern: /ws/rest/service is what we want for Boomi
-        let boomiPath;
-        if (pathSegments.length > 0 && !pathSegments[0].startsWith('ws')) {
-            // First segment is app-env-name, remove it
+        // Remove first segment (app-env-name) if it's not 'ws'
+        if (pathSegments.length > 0 && pathSegments[0] !== 'ws') {
+            console.log("Removing app-env segment:", pathSegments[0]);
             pathSegments.shift();
-            boomiPath = '/' + pathSegments.join('/');
-        } else {
-            // No app-env-name found, use as is
-            boomiPath = '/' + pathSegments.join('/');
         }
         
-        // Construct Boomi URL
-        const boomiBaseObj = new URL(boomiBase);
-        const boomiUrl = boomiBaseObj.origin + boomiBaseObj.pathname + boomiPath;
+        // Reconstruct the path
+        const transformedPath = pathSegments.join('/');
+        console.log("Transformed path:", transformedPath);
         
-        // Add query parameters from MuleSoft URL
-        const queryString = muleUrlObj.search;
-        return boomiUrl + queryString;
+        // Ensure boomi base doesn't have trailing slash
+        let cleanBoomiBase = boomiBase.replace(/\/$/, '');
+        
+        // Construct final Boomi URL
+        const finalBoomiUrl = cleanBoomiBase + '/' + transformedPath + queryPart;
+        
+        console.log("Final Boomi URL:", finalBoomiUrl);
+        return finalBoomiUrl;
         
     } catch (error) {
-        console.error("Error transforming URL:", error);
+        console.error("Error in URL transformation:", error);
         return null;
     }
 }
@@ -62,7 +68,13 @@ function transformMuleUrlToBoomi(muleUrl, muleBase, boomiBase) {
 // Transform MuleSoft URL to Boomi URL
 const boomiUrl = transformMuleUrlToBoomi(fullMuleUrl, muleBaseUrl, boomiBaseUrl);
 
-console.log("Transformed Boomi URL:", boomiUrl);
+if (!boomiUrl) {
+    console.error("❌ Failed to transform URL");
+    pm.collectionVariables.set("boomi_response", "ERROR: URL transformation failed");
+    return;
+}
+
+console.log("✅ URL transformation successful");
 
 // Extract headers
 const headers = {};
@@ -90,14 +102,17 @@ const boomiRequest = {
     method: method,
     header: headers,
     body: requestBody ? {
-        mode: currentRequest.body.mode,
+        mode: 'raw',
         raw: requestBody
     } : undefined
 };
 
-console.log("Calling Boomi API first...");
+console.log("=== Boomi Request Details ===");
 console.log("Method:", method);
-console.log("Boomi URL:", boomiUrl);
+console.log("URL:", boomiUrl);
+console.log("Headers count:", Object.keys(headers).length);
+console.log("Has body:", !!requestBody);
+console.log("============================");
 
 // Make synchronous call to Boomi using Promise
 const sendRequest = (req) => {
@@ -115,6 +130,7 @@ const sendRequest = (req) => {
 // Execute Boomi request and wait for response
 (async () => {
     try {
+        console.log("📡 Calling Boomi API...");
         const boomiResponse = await sendRequest(boomiRequest);
         
         // Store Boomi response in collection variable
