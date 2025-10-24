@@ -15,7 +15,6 @@ const pollInterval = 500;
 function waitForBoomiResponse() {
     attempts++;
     const boomiResponse = pm.collectionVariables.get("boomi_response");
-    const boomiStatus = pm.collectionVariables.get("boomi_status");
     
     console.log("Polling attempt " + attempts + "/" + maxAttempts + "...");
     
@@ -24,14 +23,12 @@ function waitForBoomiResponse() {
         executeComparison();
     } else if (attempts >= maxAttempts) {
         console.error("Boomi response timeout after " + (maxAttempts * pollInterval) + "ms");
-        console.error("Current boomiResponse value:", boomiResponse);
         
         pm.test("Boomi response received within timeout", function() {
-            pm.expect.fail("Boomi response not available after " + (maxAttempts * pollInterval) + "ms timeout");
+            pm.expect.fail("Boomi response not available after timeout");
         });
         
-        const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#fff3cd;border-radius:8px"><h2 style="color:#856404">Timeout Waiting for Boomi Response</h2><p style="color:#856404;margin-top:20px">Boomi API did not respond within ' + (maxAttempts * pollInterval / 1000) + ' seconds</p><p style="color:#721c24;font-size:14px;margin-top:15px">Possible causes:</p><ul style="text-align:left;display:inline-block;color:#721c24"><li>Boomi API is slow or timing out</li><li>Network connectivity issues</li><li>Boomi authentication failed</li><li>Incorrect Boomi URL configuration</li></ul><p style="color:#856404;font-size:12px;margin-top:20px">Check the Console for detailed logs</p></div>';
-        
+        const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#fff3cd;border-radius:8px"><h2 style="color:#856404">Timeout Waiting for Boomi Response</h2><p style="color:#856404;margin-top:20px">Boomi API did not respond within ' + (maxAttempts * pollInterval / 1000) + ' seconds</p></div>';
         pm.visualizer.set(errorTemplate);
     } else {
         setTimeout(waitForBoomiResponse, pollInterval);
@@ -41,45 +38,100 @@ function waitForBoomiResponse() {
 waitForBoomiResponse();
 
 function executeComparison() {
-    const boomiResponse = pm.collectionVariables.get("boomi_response");
+    const boomiResponseRaw = pm.collectionVariables.get("boomi_response");
     const boomiStatus = pm.collectionVariables.get("boomi_status");
-    const boomiError = pm.collectionVariables.get("boomi_error");
-    const mulesoftResponse = pm.response.text();
+    const mulesoftResponseRaw = pm.response.text();
 
-    if (!boomiResponse || boomiResponse === "") {
+    if (!boomiResponseRaw || boomiResponseRaw === "") {
         console.error("Boomi response is empty or undefined");
         
         pm.test("Boomi response exists", function() {
-            pm.expect(boomiResponse).to.exist;
-            pm.expect(boomiResponse).to.not.equal("");
+            pm.expect(boomiResponseRaw).to.exist;
         });
         
-        const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:8px"><h2 style="color:#721c24">Empty Boomi Response</h2><p style="color:#721c24">Boomi response is empty or undefined</p></div>';
-        
+        const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:8px"><h2 style="color:#721c24">Empty Boomi Response</h2></div>';
         pm.visualizer.set(errorTemplate);
         return;
     }
 
-    if (boomiResponse.startsWith("ERROR:")) {
-        console.error("Boomi request failed:", boomiResponse);
+    if (boomiResponseRaw.startsWith("ERROR:")) {
+        console.error("Boomi request failed:", boomiResponseRaw);
         
         pm.test("Boomi API call succeeded", function() {
-            pm.expect(boomiResponse).to.not.include("ERROR:");
+            pm.expect(boomiResponseRaw).to.not.include("ERROR:");
         });
         
-        const errorMsg = boomiResponse.replace('ERROR: ', '');
+        const errorMsg = boomiResponseRaw.replace('ERROR: ', '');
         const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:8px"><h2 style="color:#721c24">Boomi API Error</h2><p style="color:#721c24;margin-top:20px">' + errorMsg + '</p></div>';
-        
         pm.visualizer.set(errorTemplate);
         return;
     }
 
-    console.log("\nResponse Statistics:");
+    console.log("\nResponse Statistics (Raw):");
     console.log("  Boomi Status:", boomiStatus);
     console.log("  MuleSoft Status:", pm.response.code);
-    console.log("  Boomi Length:", boomiResponse.length, "characters");
-    console.log("  MuleSoft Length:", mulesoftResponse.length, "characters");
+    console.log("  Boomi Length:", boomiResponseRaw.length, "characters");
+    console.log("  MuleSoft Length:", mulesoftResponseRaw.length, "characters");
 
+    // Format responses based on content type
+    function formatResponse(responseText) {
+        const trimmed = responseText.trim();
+        
+        // Try to detect and format JSON
+        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
+            try {
+                const parsed = JSON.parse(trimmed);
+                return JSON.stringify(parsed, null, 2);
+            } catch (e) {
+                console.log("Failed to parse as JSON, using raw text");
+                return responseText;
+            }
+        }
+        
+        // Try to detect and format XML
+        if (trimmed.startsWith('<')) {
+            try {
+                return formatXml(trimmed);
+            } catch (e) {
+                console.log("Failed to format XML, using raw text");
+                return responseText;
+            }
+        }
+        
+        // Return as-is for plain text
+        return responseText;
+    }
+
+    // Simple XML formatter
+    function formatXml(xml) {
+        let formatted = '';
+        let indent = '';
+        const tab = '  ';
+        
+        xml.split(/>\s*</).forEach(function(node) {
+            if (node.match(/^\/\w/)) {
+                indent = indent.substring(tab.length);
+            }
+            
+            formatted += indent + '<' + node + '>\r\n';
+            
+            if (node.match(/^<?\w[^>]*[^\/]$/) && !node.startsWith("?")) {
+                indent += tab;
+            }
+        });
+        
+        return formatted.substring(1, formatted.length - 3);
+    }
+
+    // Format both responses
+    const boomiResponse = formatResponse(boomiResponseRaw);
+    const mulesoftResponse = formatResponse(mulesoftResponseRaw);
+
+    console.log("\nFormatted Response Statistics:");
+    console.log("  Boomi Formatted Length:", boomiResponse.length);
+    console.log("  MuleSoft Formatted Length:", mulesoftResponse.length);
+
+    // Split into lines
     function splitIntoLines(text) {
         if (!text) return [];
         return text.split(/\r?\n/);
@@ -91,6 +143,7 @@ function executeComparison() {
     console.log("  Boomi Lines:", boomiLines.length);
     console.log("  MuleSoft Lines:", mulesoftLines.length);
 
+    // Compare line by line
     function compareLineByLine(lines1, lines2) {
         const maxLines = Math.max(lines1.length, lines2.length);
         const comparisonResults = [];
@@ -128,6 +181,7 @@ function executeComparison() {
     console.log("  Mismatched Lines:", comparison.totalMismatches);
     console.log("  Match Rate:", Math.round(((comparison.totalLines - comparison.totalMismatches) / comparison.totalLines) * 100) + "%");
 
+    // Test assertions
     pm.test("Boomi API responded successfully", function() {
         pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]);
     });
