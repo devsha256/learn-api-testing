@@ -1,13 +1,51 @@
-// Store MuleSoft response
-const mulesoftResponse = pm.response.text();
-pm.collectionVariables.set("mule_response", mulesoftResponse);
+// Skip if this is the Boomi fetcher
+if (pm.info.requestName === "_Boomi_Fetcher") {
+    return;
+}
+
+// Skip if request name starts with underscore (utility requests)
+if (pm.info.requestName.startsWith("_")) {
+    return;
+}
+
+console.log(`\n=== Comparing Responses for: ${pm.info.requestName} ===`);
+
+// Add a small delay to ensure Boomi response is stored (async handling)
+setTimeout(() => {}, 100);
 
 // Retrieve Boomi response
 const boomiResponse = pm.collectionVariables.get("boomi_response");
+const boomiStatus = pm.collectionVariables.get("boomi_status");
+const mulesoftResponse = pm.response.text();
 
-// Split responses into lines (handle different line break types)
+// Validation
+if (!boomiResponse || boomiResponse.startsWith("ERROR:")) {
+    console.error("Boomi response unavailable or failed");
+    console.error("Boomi response:", boomiResponse);
+    
+    pm.test("Boomi API call succeeded", function() {
+        pm.expect(boomiResponse).to.not.include("ERROR:");
+    });
+    
+    const errorTemplate = `
+        <div style="padding: 40px; text-align: center; font-family: Arial; background: #fff3cd; border-radius: 8px;">
+            <h2 style="color: #856404;">Boomi Response Not Available</h2>
+            <p style="color: #856404;">The Boomi API call failed or did not complete in time.</p>
+            <p style="color: #856404; font-size: 14px; margin-top: 20px;">Error: ${boomiResponse}</p>
+        </div>
+    `;
+    pm.visualizer.set(errorTemplate);
+    return;
+}
+
+console.log("Boomi Status:", boomiStatus);
+console.log("MuleSoft Status:", pm.response.code);
+console.log("Boomi Length:", boomiResponse.length);
+console.log("MuleSoft Length:", mulesoftResponse.length);
+
+// Split into lines
 function splitIntoLines(text) {
-    // Split by \r\n, \n, or \r
+    if (!text) return [];
     return text.split(/\r?\n/);
 }
 
@@ -44,269 +82,87 @@ function compareLineByLine(lines1, lines2) {
     };
 }
 
-// Perform line-by-line comparison
 const comparison = compareLineByLine(boomiLines, mulesoftLines);
 
-// Store comparison results
-pm.collectionVariables.set("comparison_results", JSON.stringify(comparison));
-
-console.log(`Comparison complete: ${comparison.totalMismatches} mismatched lines out of ${comparison.totalLines}`);
+console.log(`Comparison: ${comparison.totalMismatches} mismatches in ${comparison.totalLines} lines`);
 
 // Test assertions
-pm.test("Boomi response received successfully", function() {
-    pm.expect(boomiResponse).to.not.include("ERROR:");
+pm.test("Boomi API responded successfully", function() {
+    pm.expect(boomiStatus).to.equal(200);
 });
 
-pm.test("MuleSoft response received successfully", function() {
-    pm.expect(pm.response.code).to.be.oneOf([200, 201, 204]);
+pm.test("MuleSoft API responded successfully", function() {
+    pm.expect(pm.response.code).to.equal(200);
 });
 
-pm.test("Both responses have same number of lines", function() {
+pm.test("Response line counts match", function() {
     pm.expect(boomiLines.length).to.equal(mulesoftLines.length);
 });
 
-pm.test("All lines match between Boomi and MuleSoft", function() {
+pm.test("All lines match exactly", function() {
     pm.expect(comparison.totalMismatches).to.equal(0);
 });
 
-// Visualizer Template - Side-by-side line comparison
+// Visualizer
+const matchPercentage = comparison.totalLines > 0 
+    ? Math.round(((comparison.totalLines - comparison.totalMismatches) / comparison.totalLines) * 100)
+    : 100;
+
 const template = `
 <!DOCTYPE html>
 <html>
 <head>
     <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body { 
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
-            padding: 20px;
-            background-color: #f5f5f5;
-        }
-        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Arial, sans-serif; padding: 20px; background: #f5f5f5; }
         .header {
             background: linear-gradient(135deg, {{#if totalMismatches}}#dc3545{{else}}#28a745{{/if}}, {{#if totalMismatches}}#c82333{{else}}#218838{{/if}});
-            color: white;
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            color: white; padding: 20px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
         }
-        
-        .header h2 {
-            margin: 0 0 10px 0;
-            font-size: 24px;
-        }
-        
-        .header-stats {
-            display: flex;
-            gap: 30px;
-            margin-top: 15px;
-            font-size: 14px;
-        }
-        
-        .stat-item {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        
-        .stat-label {
-            opacity: 0.9;
-        }
-        
-        .stat-value {
-            font-weight: bold;
-            font-size: 16px;
-        }
-        
-        .comparison-container {
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        
-        table { 
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        thead {
-            position: sticky;
-            top: 0;
-            z-index: 10;
-        }
-        
-        th { 
-            background-color: #2c3e50; 
-            color: white; 
-            padding: 15px 10px;
-            text-align: left;
-            font-weight: 600;
-            border-right: 2px solid #34495e;
-        }
-        
-        th:last-child {
-            border-right: none;
-        }
-        
-        th.line-num {
-            width: 80px;
-            text-align: center;
-        }
-        
-        th.response-column {
-            width: 45%;
-        }
-        
-        td { 
-            padding: 8px 10px;
-            vertical-align: top;
-            border-bottom: 1px solid #e0e0e0;
-            border-right: 1px solid #e0e0e0;
-            font-family: 'Courier New', Consolas, monospace;
-            font-size: 13px;
-            white-space: pre-wrap;
-            word-break: break-all;
-        }
-        
-        td:last-child {
-            border-right: none;
-        }
-        
-        td.line-num {
-            text-align: center;
-            font-weight: bold;
-            color: #666;
-            background-color: #f8f9fa;
-            font-family: 'Segoe UI', sans-serif;
-        }
-        
-        /* Match row - white background */
-        tr.match-row {
-            background-color: #ffffff;
-        }
-        
-        /* Mismatch row - light red/pink background */
-        tr.mismatch-row {
-            background-color: #ffe6e6;
-        }
-        
-        tr.mismatch-row td.line-num {
-            background-color: #ffcccc;
-            color: #c0392b;
-            font-weight: bold;
-        }
-        
-        tr:hover td {
-            background-color: #f0f0f0;
-        }
-        
-        tr.mismatch-row:hover td {
-            background-color: #ffd6d6;
-        }
-        
-        tr.mismatch-row:hover td.line-num {
-            background-color: #ffb3b3;
-        }
-        
-        .empty-line {
-            color: #999;
-            font-style: italic;
-        }
-        
-        .success-message {
-            text-align: center;
-            padding: 40px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            margin-top: 20px;
-        }
-        
-        .success-icon {
-            font-size: 64px;
-            color: #28a745;
-            margin-bottom: 20px;
-        }
-        
-        .legend {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            display: flex;
-            gap: 30px;
-            align-items: center;
-        }
-        
-        .legend-title {
-            font-weight: bold;
-            color: #333;
-        }
-        
-        .legend-item {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        
-        .legend-box {
-            width: 30px;
-            height: 20px;
-            border: 1px solid #ddd;
-            border-radius: 3px;
-        }
-        
-        .legend-box.match {
-            background-color: #ffffff;
-        }
-        
-        .legend-box.mismatch {
-            background-color: #ffe6e6;
-        }
+        .header h2 { margin: 0 0 10px 0; font-size: 24px; }
+        .header-stats { display: flex; gap: 30px; margin-top: 15px; font-size: 14px; flex-wrap: wrap; }
+        .stat-item { display: flex; align-items: center; gap: 8px; }
+        .stat-value { font-weight: bold; font-size: 16px; }
+        .legend { background: white; padding: 15px; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); display: flex; gap: 30px; align-items: center; flex-wrap: wrap; }
+        .legend-title { font-weight: bold; color: #333; }
+        .legend-item { display: flex; align-items: center; gap: 10px; }
+        .legend-box { width: 30px; height: 20px; border: 1px solid #ddd; border-radius: 3px; }
+        .legend-box.match { background-color: #ffffff; }
+        .legend-box.mismatch { background-color: #ffe6e6; }
+        .comparison-container { background: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; }
+        thead { position: sticky; top: 0; z-index: 10; }
+        th { background-color: #2c3e50; color: white; padding: 15px 10px; text-align: left; font-weight: 600; border-right: 2px solid #34495e; }
+        th:last-child { border-right: none; }
+        th.line-num { width: 80px; text-align: center; }
+        th.response-column { width: 45%; }
+        td { padding: 8px 10px; vertical-align: top; border-bottom: 1px solid #e0e0e0; border-right: 1px solid #e0e0e0; font-family: 'Courier New', monospace; font-size: 13px; white-space: pre-wrap; word-break: break-all; }
+        td:last-child { border-right: none; }
+        td.line-num { text-align: center; font-weight: bold; color: #666; background-color: #f8f9fa; font-family: 'Segoe UI', sans-serif; }
+        tr.match-row { background-color: #ffffff; }
+        tr.mismatch-row { background-color: #ffe6e6; }
+        tr.mismatch-row td.line-num { background-color: #ffcccc; color: #c0392b; font-weight: bold; }
+        tr:hover td { background-color: #f0f0f0; }
+        tr.mismatch-row:hover td { background-color: #ffd6d6; }
+        .empty-line { color: #999; font-style: italic; }
     </style>
 </head>
 <body>
     <div class="header">
-        <h2>🔍 Line-by-Line Response Comparison</h2>
+        <h2>🔍 Boomi vs MuleSoft Comparison</h2>
         <div class="header-stats">
-            <div class="stat-item">
-                <span class="stat-label">Total Lines:</span>
-                <span class="stat-value">{{totalLines}}</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">Mismatched Lines:</span>
-                <span class="stat-value">{{totalMismatches}}</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">Match Rate:</span>
-                <span class="stat-value">{{matchPercentage}}%</span>
-            </div>
-            <div class="stat-item">
-                <span class="stat-label">Status:</span>
-                <span class="stat-value">{{#if totalMismatches}}FAILED{{else}}PASSED{{/if}}</span>
-            </div>
+            <div class="stat-item"><span>Request:</span><span class="stat-value">{{requestName}}</span></div>
+            <div class="stat-item"><span>Total Lines:</span><span class="stat-value">{{totalLines}}</span></div>
+            <div class="stat-item"><span>Mismatched:</span><span class="stat-value">{{totalMismatches}}</span></div>
+            <div class="stat-item"><span>Match Rate:</span><span class="stat-value">{{matchPercentage}}%</span></div>
+            <div class="stat-item"><span>Status:</span><span class="stat-value">{{#if totalMismatches}}❌ FAILED{{else}}✅ PASSED{{/if}}</span></div>
         </div>
     </div>
-    
     <div class="legend">
         <span class="legend-title">Legend:</span>
-        <div class="legend-item">
-            <div class="legend-box match"></div>
-            <span>Matching Lines</span>
-        </div>
-        <div class="legend-item">
-            <div class="legend-box mismatch"></div>
-            <span>Mismatched Lines</span>
-        </div>
+        <div class="legend-item"><div class="legend-box match"></div><span>Matching Lines</span></div>
+        <div class="legend-item"><div class="legend-box mismatch"></div><span>Mismatched Lines</span></div>
     </div>
-    
     <div class="comparison-container">
         <table>
             <thead>
@@ -320,34 +176,19 @@ const template = `
                 {{#each results}}
                 <tr class="{{#if isMatch}}match-row{{else}}mismatch-row{{/if}}">
                     <td class="line-num">{{lineNumber}}</td>
-                    <td>{{#if boomiLine}}{{boomiLine}}{{else}}<span class="empty-line">(empty line)</span>{{/if}}</td>
-                    <td>{{#if mulesoftLine}}{{mulesoftLine}}{{else}}<span class="empty-line">(empty line)</span>{{/if}}</td>
+                    <td>{{#if boomiLine}}{{boomiLine}}{{else}}<span class="empty-line">(empty)</span>{{/if}}</td>
+                    <td>{{#if mulesoftLine}}{{mulesoftLine}}{{else}}<span class="empty-line">(empty)</span>{{/if}}</td>
                 </tr>
                 {{/each}}
             </tbody>
         </table>
     </div>
-    
-    {{#unless totalMismatches}}
-    <div class="success-message">
-        <div class="success-icon">✓</div>
-        <h3 style="color: #28a745; margin-bottom: 10px;">Perfect Match!</h3>
-        <p style="color: #666; font-size: 16px;">
-            All {{totalLines}} lines match exactly between Boomi and MuleSoft responses
-        </p>
-    </div>
-    {{/unless}}
 </body>
 </html>
 `;
 
-// Calculate match percentage
-const matchPercentage = comparison.totalLines > 0 
-    ? Math.round(((comparison.totalLines - comparison.totalMismatches) / comparison.totalLines) * 100)
-    : 100;
-
-// Set visualizer with comparison data
 pm.visualizer.set(template, {
+    requestName: pm.info.requestName,
     results: comparison.results,
     totalMismatches: comparison.totalMismatches,
     totalLines: comparison.totalLines,
