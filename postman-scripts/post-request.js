@@ -1,35 +1,38 @@
-// Skip if this is a utility request
 if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) {
-    console.log("Skipping utility request:", pm.info.requestName);
     return;
 }
 
-console.log("\n=== Comparing Responses for: " + pm.info.requestName + " ===");
+// Check if running in Collection Runner
+const isCollectionRunner = pm.info.iterationCount > 1;
+const isIndividualExecution = !isCollectionRunner;
 
-// Polling configuration
+if (isIndividualExecution) {
+    console.log("Individual execution mode - will show detailed comparison");
+} else {
+    console.log("Collection Runner mode - silent execution");
+}
+
 let attempts = 0;
 const maxAttempts = 20;
 const pollInterval = 500;
 
-// Start polling for Boomi response
 function waitForBoomiResponse() {
     attempts++;
     const boomiResponse = pm.collectionVariables.get("boomi_response");
     
-    console.log("Polling attempt " + attempts + "/" + maxAttempts + "...");
-    
     if (boomiResponse && boomiResponse !== "" && boomiResponse !== "undefined" && boomiResponse !== null) {
-        console.log("Boomi response ready after " + (attempts * pollInterval) + "ms");
         executeComparison();
     } else if (attempts >= maxAttempts) {
-        console.error("Boomi response timeout after " + (maxAttempts * pollInterval) + "ms");
-        
-        pm.test("Boomi response received within timeout", function() {
-            pm.expect.fail("Boomi response not available after timeout");
+        console.error("Boomi response timeout");
+        pm.test("Boomi response received", function() {
+            pm.expect.fail("Timeout waiting for Boomi response");
         });
         
-        const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#fff3cd;border-radius:8px"><h2 style="color:#856404">Timeout Waiting for Boomi Response</h2><p style="color:#856404;margin-top:20px">Boomi API did not respond within ' + (maxAttempts * pollInterval / 1000) + ' seconds</p></div>';
-        pm.visualizer.set(errorTemplate);
+        // Show timeout message in visualizer for individual execution
+        if (isIndividualExecution) {
+            const errorHtml = '<div style="padding:40px;text-align:center;font-family:Arial;background:#fff3cd;border-radius:4px"><h2 style="color:#856404">Timeout</h2><p>Boomi response not received within 10 seconds</p></div>';
+            pm.visualizer.set(errorHtml);
+        }
     } else {
         setTimeout(waitForBoomiResponse, pollInterval);
     }
@@ -41,130 +44,62 @@ function executeComparison() {
     const boomiResponseRaw = pm.collectionVariables.get("boomi_response");
     const boomiStatus = pm.collectionVariables.get("boomi_status");
     const mulesoftResponseRaw = pm.response.text();
+    const reportIndex = pm.collectionVariables.get("current_report_index");
+    const requestName = pm.collectionVariables.get("temp_request_name") || pm.info.requestName;
+    const curlCommand = pm.collectionVariables.get("temp_request_curl") || "";
 
     if (!boomiResponseRaw || boomiResponseRaw === "") {
-        console.error("Boomi response is empty or undefined");
-        
-        pm.test("Boomi response exists", function() {
-            pm.expect(boomiResponseRaw).to.exist;
-        });
-        
-        const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:8px"><h2 style="color:#721c24">Empty Boomi Response</h2></div>';
-        pm.visualizer.set(errorTemplate);
+        console.error("Boomi response empty");
+        if (isIndividualExecution) {
+            const errorHtml = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:4px"><h2 style="color:#721c24">Empty Response</h2><p>Boomi response is empty</p></div>';
+            pm.visualizer.set(errorHtml);
+        }
         return;
     }
-
+    
     if (boomiResponseRaw.startsWith("ERROR:")) {
-        console.error("Boomi request failed:", boomiResponseRaw);
-        
-        pm.test("Boomi API call succeeded", function() {
-            pm.expect(boomiResponseRaw).to.not.include("ERROR:");
-        });
-        
-        const errorMsg = boomiResponseRaw.replace('ERROR: ', '');
-        const errorTemplate = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:8px"><h2 style="color:#721c24">Boomi API Error</h2><p style="color:#721c24;margin-top:20px">' + errorMsg + '</p></div>';
-        pm.visualizer.set(errorTemplate);
+        console.error("Boomi API error");
+        if (isIndividualExecution) {
+            const errorHtml = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:4px"><h2 style="color:#721c24">Boomi Error</h2><p>' + boomiResponseRaw.replace('ERROR: ', '') + '</p></div>';
+            pm.visualizer.set(errorHtml);
+        }
         return;
     }
 
-    // Get exempted fields from collection variables
     const exemptedFieldsStr = pm.collectionVariables.get("exempted_fields");
     const exemptedFields = exemptedFieldsStr ? JSON.parse(exemptedFieldsStr) : [];
-    
-    console.log("\nExempted fields:", exemptedFields);
-    console.log("\nResponse Statistics (Raw):");
-    console.log("  Boomi Status:", boomiStatus);
-    console.log("  MuleSoft Status:", pm.response.code);
-    console.log("  Boomi Length:", boomiResponseRaw.length, "characters");
-    console.log("  MuleSoft Length:", mulesoftResponseRaw.length, "characters");
 
-    // Format responses based on content type
     function formatResponse(responseText) {
         const trimmed = responseText.trim();
-        
-        // Try to detect and format JSON
         if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
             try {
-                const parsed = JSON.parse(trimmed);
-                return JSON.stringify(parsed, null, 2);
+                return JSON.stringify(JSON.parse(trimmed), null, 2);
             } catch (e) {
-                console.log("Failed to parse as JSON, using raw text");
                 return responseText;
             }
         }
-        
-        // Try to detect and format XML
-        if (trimmed.startsWith('<')) {
-            try {
-                return formatXml(trimmed);
-            } catch (e) {
-                console.log("Failed to format XML, using raw text");
-                return responseText;
-            }
-        }
-        
-        // Return as-is for plain text
         return responseText;
     }
 
-    // Simple XML formatter
-    function formatXml(xml) {
-        let formatted = '';
-        let indent = '';
-        const tab = '  ';
-        
-        xml.split(/>\s*</).forEach(function(node) {
-            if (node.match(/^\/\w/)) {
-                indent = indent.substring(tab.length);
-            }
-            
-            formatted += indent + '<' + node + '>\r\n';
-            
-            if (node.match(/^<?\w[^>]*[^\/]$/) && !node.startsWith("?")) {
-                indent += tab;
-            }
-        });
-        
-        return formatted.substring(1, formatted.length - 3);
-    }
-
-    // Format both responses
     const boomiResponse = formatResponse(boomiResponseRaw);
     const mulesoftResponse = formatResponse(mulesoftResponseRaw);
 
-    console.log("\nFormatted Response Statistics:");
-    console.log("  Boomi Formatted Length:", boomiResponse.length);
-    console.log("  MuleSoft Formatted Length:", mulesoftResponse.length);
-
-    // Check if line contains any exempted field
     function lineContainsExemptedField(line, exemptedFields) {
         for (let i = 0; i < exemptedFields.length; i++) {
-            const field = exemptedFields[i];
-            // Check for JSON format: "fieldName":
-            if (line.includes('"' + field + '"')) {
-                return true;
-            }
-            // Check for XML format: <fieldName>
-            if (line.includes('<' + field + '>') || line.includes('<' + field + ' ')) {
+            if (line.includes('"' + exemptedFields[i] + '"') || line.includes('<' + exemptedFields[i] + '>')) {
                 return true;
             }
         }
         return false;
     }
 
-    // Split into lines
     function splitIntoLines(text) {
-        if (!text) return [];
-        return text.split(/\r?\n/);
+        return text ? text.split(/\r?\n/) : [];
     }
 
     const boomiLines = splitIntoLines(boomiResponse);
     const mulesoftLines = splitIntoLines(mulesoftResponse);
 
-    console.log("  Boomi Lines:", boomiLines.length);
-    console.log("  MuleSoft Lines:", mulesoftLines.length);
-
-    // Compare line by line with exemption logic
     function compareLineByLine(lines1, lines2, exemptedFields) {
         const maxLines = Math.max(lines1.length, lines2.length);
         const comparisonResults = [];
@@ -175,29 +110,21 @@ function executeComparison() {
             const boomiLine = lines1[i] !== undefined ? lines1[i] : '';
             const mulesoftLine = lines2[i] !== undefined ? lines2[i] : '';
             const isMatch = boomiLine === mulesoftLine;
-            
-            // Check if line contains exempted field
-            const isExempted = lineContainsExemptedField(boomiLine, exemptedFields) || 
-                              lineContainsExemptedField(mulesoftLine, exemptedFields);
+            const isExempted = lineContainsExemptedField(boomiLine, exemptedFields) || lineContainsExemptedField(mulesoftLine, exemptedFields);
             
             let status = 'match';
-            
             if (isExempted) {
                 status = 'exempted';
                 exemptedCount++;
-                console.log("  Line " + (i + 1) + " exempted (contains dynamic field)");
             } else if (!isMatch) {
                 status = 'mismatch';
                 mismatchCount++;
-                console.log("  Mismatch at line " + (i + 1));
             }
             
             comparisonResults.push({
                 lineNumber: i + 1,
                 boomiLine: boomiLine,
                 mulesoftLine: mulesoftLine,
-                isMatch: isMatch,
-                isExempted: isExempted,
                 status: status
             });
         }
@@ -212,64 +139,83 @@ function executeComparison() {
 
     const comparison = compareLineByLine(boomiLines, mulesoftLines, exemptedFields);
 
-    console.log("\nComparison Complete:");
-    console.log("  Total Lines:", comparison.totalLines);
-    console.log("  Mismatched Lines:", comparison.totalMismatches);
-    console.log("  Exempted Lines:", comparison.totalExempted);
-    console.log("  Match Rate:", Math.round(((comparison.totalLines - comparison.totalMismatches - comparison.totalExempted) / comparison.totalLines) * 100) + "%");
+    console.log("Comparison: " + comparison.totalMismatches + " mismatches, " + comparison.totalExempted + " exempted");
 
-    // Test assertions
-    pm.test("Boomi API responded successfully", function() {
+    pm.test("Boomi API responded", function() {
         pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]);
     });
 
-    pm.test("MuleSoft API responded successfully", function() {
+    pm.test("MuleSoft API responded", function() {
         pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]);
     });
 
-    pm.test("Response line counts match", function() {
+    pm.test("Line counts match", function() {
         pm.expect(boomiLines.length).to.equal(mulesoftLines.length);
     });
 
-    pm.test("All non-exempted lines match exactly", function() {
+    pm.test("All non-exempted lines match", function() {
         pm.expect(comparison.totalMismatches).to.equal(0);
     });
 
     const matchPercentage = comparison.totalLines > 0 ? Math.round(((comparison.totalLines - comparison.totalMismatches - comparison.totalExempted) / comparison.totalLines) * 100) : 100;
-    const headerColor = comparison.totalMismatches > 0 ? '#dc3545' : '#28a745';
     const statusText = comparison.totalMismatches > 0 ? 'FAILED' : 'PASSED';
-    
-    // Build table rows with exemption handling
-    let tableRows = '';
-    for (let i = 0; i < comparison.results.length; i++) {
-        const row = comparison.results[i];
-        let rowClass = 'match-row';
+
+    function minifyResponse(responseText) {
+        if (!responseText) return "";
+        try {
+            return JSON.stringify(JSON.parse(responseText.trim()));
+        } catch (e) {
+            return responseText.trim().substring(0, 1000);
+        }
+    }
+
+    const statsObj = {
+        totalLines: comparison.totalLines,
+        matchedLines: comparison.totalLines - comparison.totalMismatches - comparison.totalExempted,
+        mismatchedLines: comparison.totalMismatches,
+        exemptedLines: comparison.totalExempted,
+        matchPercentage: matchPercentage,
+        status: statusText,
+        boomiStatus: boomiStatus,
+        mulesoftStatus: pm.response.code,
+        timestamp: new Date().toISOString()
+    };
+
+    const reportEntry = {
+        serialNumber: parseInt(reportIndex),
+        requestName: requestName,
+        curlCommand: curlCommand,
+        boomiResponse: minifyResponse(boomiResponseRaw),
+        mulesoftResponse: minifyResponse(mulesoftResponseRaw),
+        statistics: statsObj
+    };
+
+    const paddedIndex = reportIndex.padStart(3, '0');
+    pm.collectionVariables.set("report_data_" + paddedIndex, JSON.stringify(reportEntry));
+
+    pm.collectionVariables.set("temp_request_name", "");
+    pm.collectionVariables.set("temp_request_curl", "");
+
+    // Show visualizer ONLY for individual execution
+    if (isIndividualExecution) {
+        console.log("Rendering visualizer with " + comparison.results.length + " lines");
         
-        if (row.status === 'exempted') {
-            rowClass = 'exempted-row';
-        } else if (row.status === 'mismatch') {
-            rowClass = 'mismatch-row';
+        let tableRows = '';
+        for (let i = 0; i < comparison.results.length; i++) {
+            const row = comparison.results[i];
+            const rowClass = row.status === 'exempted' ? 'exempted' : (row.status === 'mismatch' ? 'mismatch' : 'match');
+            const boomiText = row.boomiLine || '<span class="empty">(empty)</span>';
+            const mulesoftText = row.mulesoftLine || '<span class="empty">(empty)</span>';
+            tableRows += '<tr class="' + rowClass + '"><td>' + row.lineNumber + '</td><td>' + boomiText + '</td><td>' + mulesoftText + '</td></tr>';
         }
         
-        const boomiText = row.boomiLine || '<span class="empty-line">(empty line)</span>';
-        const mulesoftText = row.mulesoftLine || '<span class="empty-line">(empty line)</span>';
-        tableRows += '<tr class="' + rowClass + '"><td class="line-num">' + row.lineNumber + '</td><td>' + boomiText + '</td><td>' + mulesoftText + '</td></tr>';
-    }
-
-    // Build complete HTML template with exempted styling
-    let htmlTemplate = '<!DOCTYPE html><html><head><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;padding:20px;background:#f5f5f5}.header{background:' + headerColor + ';color:white;padding:20px;border-radius:8px;margin-bottom:20px;box-shadow:0 2px 4px rgba(0,0,0,0.1)}.header h2{margin:0 0 10px 0;font-size:24px}.header-stats{display:flex;gap:30px;margin-top:15px;font-size:14px;flex-wrap:wrap}.stat-item{display:flex;align-items:center;gap:8px}.stat-value{font-weight:bold;font-size:16px}.legend{background:white;padding:15px;border-radius:8px;margin-bottom:20px;box-shadow:0 2px 4px rgba(0,0,0,0.1);display:flex;gap:30px;align-items:center;flex-wrap:wrap}.legend-title{font-weight:bold;color:#333}.legend-item{display:flex;align-items:center;gap:10px}.legend-box{width:30px;height:20px;border:1px solid #ddd;border-radius:3px}.legend-box.match{background-color:#ffffff}.legend-box.mismatch{background-color:#ffe6e6}.legend-box.exempted{background-color:#fff3cd}.comparison-container{background:white;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);overflow:hidden;max-height:80vh;overflow-y:auto}table{width:100%;border-collapse:collapse}thead{position:sticky;top:0;z-index:10}th{background-color:#2c3e50;color:white;padding:15px 10px;text-align:left;font-weight:600;border-right:2px solid #34495e}th:last-child{border-right:none}th.line-num{width:80px;text-align:center}th.response-column{width:45%}td{padding:8px 10px;vertical-align:top;border-bottom:1px solid #e0e0e0;border-right:1px solid #e0e0e0;font-family:Consolas,monospace;font-size:13px;white-space:pre-wrap;word-break:break-all}td:last-child{border-right:none}td.line-num{text-align:center;font-weight:bold;color:#666;background-color:#f8f9fa;font-family:Arial,sans-serif}tr.match-row{background-color:#ffffff}tr.mismatch-row{background-color:#ffe6e6}tr.mismatch-row td.line-num{background-color:#ffcccc;color:#c0392b;font-weight:bold}tr.exempted-row{background-color:#fff3cd}tr.exempted-row td.line-num{background-color:#ffeaa7;color:#856404;font-weight:bold}tr:hover td{background-color:#f0f0f0}tr.mismatch-row:hover td{background-color:#ffd6d6}tr.exempted-row:hover td{background-color:#ffe8a1}.empty-line{color:#999;font-style:italic}.success-message{text-align:center;padding:40px;background:white;border-radius:8px;box-shadow:0 2px 4px rgba(0,0,0,0.1);margin-top:20px}.success-icon{font-size:64px;color:#28a745;margin-bottom:20px}</style></head><body>';
-    
-    htmlTemplate += '<div class="header"><h2>Boomi vs MuleSoft Response Comparison</h2><div class="header-stats"><div class="stat-item"><span>Request:</span><span class="stat-value">' + pm.info.requestName + '</span></div><div class="stat-item"><span>Total Lines:</span><span class="stat-value">' + comparison.totalLines + '</span></div><div class="stat-item"><span>Mismatched:</span><span class="stat-value">' + comparison.totalMismatches + '</span></div><div class="stat-item"><span>Exempted:</span><span class="stat-value">' + comparison.totalExempted + '</span></div><div class="stat-item"><span>Match Rate:</span><span class="stat-value">' + matchPercentage + '%</span></div><div class="stat-item"><span>Status:</span><span class="stat-value">' + statusText + '</span></div></div></div>';
-    
-    htmlTemplate += '<div class="legend"><span class="legend-title">Legend:</span><div class="legend-item"><div class="legend-box match"></div><span>Matching Lines</span></div><div class="legend-item"><div class="legend-box mismatch"></div><span>Mismatched Lines</span></div><div class="legend-item"><div class="legend-box exempted"></div><span>Exempted Lines (Dynamic Fields)</span></div></div>';
-
-    if (comparison.totalMismatches > 0 || comparison.totalExempted > 0) {
-        htmlTemplate += '<div class="comparison-container"><table><thead><tr><th class="line-num">Line</th><th class="response-column">Boomi Response</th><th class="response-column">MuleSoft Response</th></tr></thead><tbody>' + tableRows + '</tbody></table></div>';
+        const headerBg = comparison.totalMismatches > 0 ? '#c0392b' : '#27ae60';
+        
+        const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:15px;background:#f5f5f5}.header{background:' + headerBg + ';color:#fff;padding:15px;border-radius:4px;margin-bottom:15px}.header h2{font-size:16px;margin-bottom:8px}.stats{display:flex;gap:20px;font-size:11px;flex-wrap:wrap}.stats div{display:flex;align-items:center;gap:5px}.stats .label{opacity:0.9}.stats .value{font-weight:bold;font-size:13px}.legend{background:#fff;padding:12px;border-radius:4px;margin-bottom:15px;display:flex;gap:15px;align-items:center;font-size:11px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}.legend-title{font-weight:bold;color:#333}.legend-item{display:flex;align-items:center;gap:6px}.legend-box{width:20px;height:14px;border:1px solid #ddd;border-radius:2px}.legend-box.match{background:#fff}.legend-box.mismatch{background:#ffebee}.legend-box.exempted{background:#fff3cd}.table-container{background:#fff;border-radius:4px;overflow:auto;max-height:70vh;box-shadow:0 1px 3px rgba(0,0,0,0.1)}table{width:100%;border-collapse:collapse;font-size:11px}thead{position:sticky;top:0;background:#34495e;color:#fff;z-index:10}th{padding:10px 8px;text-align:left;font-weight:600;font-size:10px;border-right:1px solid #2c3e50}th:first-child{width:50px;text-align:center}td{padding:8px;border-bottom:1px solid #ecf0f1;border-right:1px solid #ecf0f1;font-family:Consolas,monospace;font-size:11px;vertical-align:top;word-break:break-all}td:first-child{text-align:center;font-weight:bold;background:#f8f9fa;font-family:Arial,sans-serif}tr.match{background:#fff}tr.mismatch{background:#ffebee}tr.mismatch td:first-child{background:#ffcdd2;color:#c0392b}tr.exempted{background:#fff3cd}tr.exempted td:first-child{background:#ffecb3;color:#f57c00}tr:hover td{opacity:0.9}.empty{color:#95a5a6;font-style:italic}.signature{text-align:right;margin-top:10px;font-size:9px;color:#95a5a6;font-style:italic}</style></head><body><div class="header"><h2>Response Comparison: ' + requestName + '</h2><div class="stats"><div><span class="label">Lines:</span><span class="value">' + comparison.totalLines + '</span></div><div><span class="label">Mismatched:</span><span class="value">' + comparison.totalMismatches + '</span></div><div><span class="label">Exempted:</span><span class="value">' + comparison.totalExempted + '</span></div><div><span class="label">Match:</span><span class="value">' + matchPercentage + '%</span></div><div><span class="label">Status:</span><span class="value">' + statusText + '</span></div></div></div><div class="legend"><span class="legend-title">Legend:</span><div class="legend-item"><div class="legend-box match"></div><span>Match</span></div><div class="legend-item"><div class="legend-box mismatch"></div><span>Mismatch</span></div><div class="legend-item"><div class="legend-box exempted"></div><span>Exempted</span></div></div><div class="table-container"><table><thead><tr><th>Line</th><th>Boomi Response</th><th>MuleSoft Response</th></tr></thead><tbody>' + tableRows + '</tbody></table></div><div class="signature">S. 2025</div></body></html>';
+        
+        pm.visualizer.set(html);
+        console.log("Visualizer set successfully");
     } else {
-        htmlTemplate += '<div class="success-message"><div class="success-icon">✓</div><h3 style="color:#28a745;margin-bottom:10px">Perfect Match!</h3><p style="color:#666;font-size:16px">All ' + comparison.totalLines + ' lines match exactly between Boomi and MuleSoft responses</p></div>';
+        console.log("Collection Runner - skipping visualizer");
     }
-
-    htmlTemplate += '</body></html>';
-
-    pm.visualizer.set(htmlTemplate);
 }
