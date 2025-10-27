@@ -1,7 +1,7 @@
-// This now properly exits early for [SETUP] and [REPORT] requests
+// Skip utility requests
 if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) {
-    console.log("Skipping utility request: " + pm.info.requestName);
-    return; // Exits immediately, doesn't run any comparison logic
+    console.log("Skipping pre-request for: " + pm.info.requestName);
+    return;
 }
 
 const requestCounter = pm.collectionVariables.get("report_request_count");
@@ -30,73 +30,130 @@ const requestUrl = pm.request.url;
 function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
     try {
         const fullUrl = requestUrl.toString();
-        let pathAfterBase = fullUrl.replace(muleBase, '');
-        if (pathAfterBase.startsWith('/')) {
-            pathAfterBase = pathAfterBase.substring(1);
+        
+        // Parse muleBase to extract protocol, host, port, and base path
+        const muleBaseRegex = /^(https?:\/\/[^\/:]+(:\d+)?)(\/.*)?$/;
+        const muleBaseMatch = muleBase.match(muleBaseRegex);
+        
+        if (!muleBaseMatch) {
+            console.error("Invalid mule base URL format");
+            return null;
         }
-        const urlParts = pathAfterBase.split('?');
+        
+        const muleProtocolHost = muleBaseMatch[1]; // https://mule-base.com or https://mule-base.com:443
+        const muleBasePath = muleBaseMatch[3] || ''; // /test-app or empty
+        
+        // Parse boomiBase
+        const boomiBaseRegex = /^(https?:\/\/[^\/:]+(:\d+)?)(\/.*)?$/;
+        const boomiBaseMatch = boomiBase.match(boomiBaseRegex);
+        
+        if (!boomiBaseMatch) {
+            console.error("Invalid boomi base URL format");
+            return null;
+        }
+        
+        const boomiProtocolHost = boomiBaseMatch[1]; // https://boomi-base.com or https://boomi-base.com:443
+        const boomiBasePath = boomiBaseMatch[3] || ''; // usually empty
+        
+        // Remove mule protocol+host from full URL
+        let pathAfterHost = fullUrl;
+        if (fullUrl.startsWith(muleProtocolHost)) {
+            pathAfterHost = fullUrl.substring(muleProtocolHost.length);
+        } else {
+            console.error("URL doesn't start with mule base");
+            return null;
+        }
+        
+        // Remove mule base path if present
+        if (muleBasePath && pathAfterHost.startsWith(muleBasePath)) {
+            pathAfterHost = pathAfterHost.substring(muleBasePath.length);
+        }
+        
+        // Ensure path starts with /
+        if (!pathAfterHost.startsWith('/')) {
+            pathAfterHost = '/' + pathAfterHost;
+        }
+        
+        // Split path and query string
+        const urlParts = pathAfterHost.split('?');
         const pathPart = urlParts[0];
         const queryPart = urlParts.length > 1 ? '?' + urlParts[1] : '';
-        const pathSegments = pathPart.split('/').filter(s => s.length > 0);
+        
+        // Split path into segments
+        const pathSegments = pathPart.split('/').filter(function(s) { return s.length > 0; });
+        
+        // Remove first segment if it's NOT 'ws' (the app name like 'test-app')
         if (pathSegments.length > 0 && pathSegments[0] !== 'ws') {
             pathSegments.shift();
         }
-        const cleanBoomiBase = boomiBase.replace(/\/$/, '');
+        
+        // Reconstruct boomi URL
         const transformedPath = pathSegments.join('/');
-        return cleanBoomiBase + '/' + transformedPath + queryPart;
+        const boomiFullPath = boomiBasePath ? boomiBasePath + '/' + transformedPath : '/' + transformedPath;
+        
+        return boomiProtocolHost + boomiFullPath + queryPart;
+        
     } catch (error) {
         console.error("URL transformation failed:", error);
         return null;
     }
 }
 
+
 const boomiUrl = transformMuleUrlToBoomi(requestUrl, muleBaseUrl, boomiBaseUrl);
+
+console.log("Mule URL: " + requestUrl.toString());
+console.log("Boomi URL: " + boomiUrl);
 
 if (!boomiUrl) {
     console.error("Failed to generate Boomi URL");
     return;
 }
 
+// Collect headers with RESOLVED VALUES (not variables)
 const headers = {};
 const excludedHeaders = ['host', 'content-length', 'connection', 'user-agent', 'postman-token'];
 
-currentRequest.headers.each((header) => {
+currentRequest.headers.each(function(header) {
     const headerKey = header.key.toLowerCase();
-    if (!header.disabled && !excludedHeaders.includes(headerKey)) {
-        headers[header.key] = header.value;
+    if (!header.disabled && excludedHeaders.indexOf(headerKey) === -1) {
+        // Use pm.variables.replaceIn to resolve dynamic variables like {{$guid}}
+        const resolvedValue = pm.variables.replaceIn(header.value);
+        headers[header.key] = resolvedValue;
     }
 });
 
 let requestBody = null;
 let bodyMode = null;
 
-if (currentRequest.body && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+if (currentRequest.body && ['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) !== -1) {
     bodyMode = currentRequest.body.mode;
     switch(bodyMode) {
         case 'raw':
-            requestBody = currentRequest.body.raw;
+            // Resolve variables in body too
+            requestBody = pm.variables.replaceIn(currentRequest.body.raw);
             break;
         case 'formdata':
             const formData = {};
-            currentRequest.body.formdata.each((item) => {
+            currentRequest.body.formdata.each(function(item) {
                 if (!item.disabled) {
-                    formData[item.key] = item.value;
+                    formData[item.key] = pm.variables.replaceIn(item.value);
                 }
             });
             requestBody = formData;
             break;
         case 'urlencoded':
             const urlencodedData = {};
-            currentRequest.body.urlencoded.each((item) => {
+            currentRequest.body.urlencoded.each(function(item) {
                 if (!item.disabled) {
-                    urlencodedData[item.key] = item.value;
+                    urlencodedData[item.key] = pm.variables.replaceIn(item.value);
                 }
             });
             requestBody = urlencodedData;
             break;
         case 'graphql':
             requestBody = JSON.stringify({
-                query: currentRequest.body.graphql.query,
+                query: pm.variables.replaceIn(currentRequest.body.graphql.query),
                 variables: currentRequest.body.graphql.variables
             });
             break;
@@ -156,23 +213,34 @@ if (requestBody) {
     }
 }
 
-let curlCommand = 'curl -X ' + method + ' "' + requestUrl.toString() + '"';
-currentRequest.headers.each((header) => {
-    if (!header.disabled) {
-        curlCommand += ' -H "' + header.key + ': ' + header.value + '"';
-    }
-});
-if (requestBody && bodyMode === 'raw') {
-    const bodyEscaped = requestBody.replace(/"/g, '\\"').substring(0, 500);
-    curlCommand += ' -d "' + bodyEscaped + '..."';
+// Generate COMPLETE cURL with resolved values
+let curlCommand = 'curl --location \'' + requestUrl.toString() + '\'';
+
+if (method !== 'GET') {
+    curlCommand += ' \\\n--request ' + method;
 }
 
+// Add all headers with RESOLVED values
+const headerKeys = Object.keys(headers);
+headerKeys.forEach(function(headerKey) {
+    const headerValue = headers[headerKey];
+    const escapedValue = String(headerValue).replace(/'/g, "'\\''");
+    curlCommand += ' \\\n--header \'' + headerKey + ': ' + escapedValue + '\'';
+});
+
+// Add COMPLETE body without any truncation
+if (requestBody && bodyMode === 'raw') {
+    let escapedBody = String(requestBody).replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+    curlCommand += ' \\\n--data-raw \'' + escapedBody + '\'';
+}
+
+// Store in collection variable - NO LENGTH LIMIT
 pm.collectionVariables.set("temp_request_name", pm.info.requestName);
 pm.collectionVariables.set("temp_request_curl", curlCommand);
 
-console.log("Calling Boomi API...");
+console.log("cURL generated successfully, length: " + curlCommand.length + " characters");
 
-pm.sendRequest(boomiRequest, (err, response) => {
+pm.sendRequest(boomiRequest, function(err, response) {
     if (err) {
         console.error("Boomi request failed:", err.message);
         pm.collectionVariables.set("boomi_response", "ERROR: " + err.message);

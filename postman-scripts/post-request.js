@@ -1,16 +1,13 @@
+// Skip utility requests
 if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) {
+    console.log("Skipping utility request: " + pm.info.requestName);
     return;
 }
 
-// Check if running in Collection Runner
-const isCollectionRunner = pm.info.iterationCount > 1;
+const isCollectionRunner = pm.info.iteration > 0;
 const isIndividualExecution = !isCollectionRunner;
 
-if (isIndividualExecution) {
-    console.log("Individual execution mode - will show detailed comparison");
-} else {
-    console.log("Collection Runner mode - silent execution");
-}
+console.log("Request: " + pm.info.requestName + ", Individual: " + isIndividualExecution);
 
 let attempts = 0;
 const maxAttempts = 20;
@@ -27,11 +24,8 @@ function waitForBoomiResponse() {
         pm.test("Boomi response received", function() {
             pm.expect.fail("Timeout waiting for Boomi response");
         });
-        
-        // Show timeout message in visualizer for individual execution
         if (isIndividualExecution) {
-            const errorHtml = '<div style="padding:40px;text-align:center;font-family:Arial;background:#fff3cd;border-radius:4px"><h2 style="color:#856404">Timeout</h2><p>Boomi response not received within 10 seconds</p></div>';
-            pm.visualizer.set(errorHtml);
+            pm.visualizer.set(`<div style="padding:40px;text-align:center;font-family:Arial;background:#fff3cd"><h2>Timeout</h2><p>Boomi response not received</p></div>`);
         }
     } else {
         setTimeout(waitForBoomiResponse, pollInterval);
@@ -48,132 +42,432 @@ function executeComparison() {
     const requestName = pm.collectionVariables.get("temp_request_name") || pm.info.requestName;
     const curlCommand = pm.collectionVariables.get("temp_request_curl") || "";
 
-    if (!boomiResponseRaw || boomiResponseRaw === "") {
-        console.error("Boomi response empty");
-        if (isIndividualExecution) {
-            const errorHtml = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:4px"><h2 style="color:#721c24">Empty Response</h2><p>Boomi response is empty</p></div>';
-            pm.visualizer.set(errorHtml);
-        }
-        return;
-    }
-    
-    if (boomiResponseRaw.startsWith("ERROR:")) {
-        console.error("Boomi API error");
-        if (isIndividualExecution) {
-            const errorHtml = '<div style="padding:40px;text-align:center;font-family:Arial;background:#f8d7da;border-radius:4px"><h2 style="color:#721c24">Boomi Error</h2><p>' + boomiResponseRaw.replace('ERROR: ', '') + '</p></div>';
-            pm.visualizer.set(errorHtml);
-        }
+    if (!boomiResponseRaw || boomiResponseRaw === "" || boomiResponseRaw.startsWith("ERROR:")) {
+        console.error("Boomi response invalid");
         return;
     }
 
     const exemptedFieldsStr = pm.collectionVariables.get("exempted_fields");
     const exemptedFields = exemptedFieldsStr ? JSON.parse(exemptedFieldsStr) : [];
 
-    function formatResponse(responseText) {
-        const trimmed = responseText.trim();
-        if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-            try {
-                return JSON.stringify(JSON.parse(trimmed), null, 2);
-            } catch (e) {
-                return responseText;
+    // Parse responses
+    let boomi, mule;
+    try { boomi = JSON.parse(boomiResponseRaw); } catch (e) { boomi = boomiResponseRaw; }
+    try { mule = JSON.parse(mulesoftResponseRaw); } catch (e) { mule = mulesoftResponseRaw; }
+
+    // ===== IMPROVED ARRAY ALIGNMENT WITH LCS =====
+    
+    function normalizeArrays(obj) {
+        if (Array.isArray(obj)) {
+            const allPrimitive = obj.every(item => typeof item !== 'object' || item === null);
+            if (allPrimitive) {
+                return obj.slice().sort();
             }
+            return obj.map(normalizeArrays);
+        } else if (obj !== null && typeof obj === 'object') {
+            const normalized = {};
+            Object.keys(obj).sort().forEach(key => {
+                normalized[key] = normalizeArrays(obj[key]);
+            });
+            return normalized;
         }
-        return responseText;
+        return obj;
     }
-
-    const boomiResponse = formatResponse(boomiResponseRaw);
-    const mulesoftResponse = formatResponse(mulesoftResponseRaw);
-
-    function lineContainsExemptedField(line, exemptedFields) {
-        for (let i = 0; i < exemptedFields.length; i++) {
-            if (line.includes('"' + exemptedFields[i] + '"') || line.includes('<' + exemptedFields[i] + '>')) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    function splitIntoLines(text) {
-        return text ? text.split(/\r?\n/) : [];
-    }
-
-    const boomiLines = splitIntoLines(boomiResponse);
-    const mulesoftLines = splitIntoLines(mulesoftResponse);
-
-    function compareLineByLine(lines1, lines2, exemptedFields) {
-        const maxLines = Math.max(lines1.length, lines2.length);
-        const comparisonResults = [];
-        let mismatchCount = 0;
-        let exemptedCount = 0;
+    
+    const boomiNorm = normalizeArrays(boomi);
+    const muleNorm = normalizeArrays(mule);
+    
+    // Build JSON lines tracking array membership
+    function buildJSONLines(obj, path, indent) {
+        const lines = [];
+        path = path || '';
+        indent = indent || 0;
         
-        for (let i = 0; i < maxLines; i++) {
-            const boomiLine = lines1[i] !== undefined ? lines1[i] : '';
-            const mulesoftLine = lines2[i] !== undefined ? lines2[i] : '';
-            const isMatch = boomiLine === mulesoftLine;
-            const isExempted = lineContainsExemptedField(boomiLine, exemptedFields) || lineContainsExemptedField(mulesoftLine, exemptedFields);
+        if (obj === null) {
+            lines.push({
+                text: 'null',
+                indent: indent,
+                path: path,
+                isPrimitive: true
+            });
+        } else if (typeof obj !== 'object') {
+            lines.push({
+                text: JSON.stringify(obj),
+                indent: indent,
+                path: path,
+                isPrimitive: true,
+                value: obj
+            });
+        } else if (Array.isArray(obj)) {
+            const arrayPath = path;
+            const allPrimitive = obj.every(item => typeof item !== 'object' || item === null);
             
-            let status = 'match';
-            if (isExempted) {
-                status = 'exempted';
-                exemptedCount++;
-            } else if (!isMatch) {
-                status = 'mismatch';
-                mismatchCount++;
-            }
+            lines.push({ 
+                text: '[', 
+                indent: indent, 
+                path: path, 
+                type: 'open-array' 
+            });
             
-            comparisonResults.push({
-                lineNumber: i + 1,
-                boomiLine: boomiLine,
-                mulesoftLine: mulesoftLine,
-                status: status
+            obj.forEach((item, idx) => {
+                const itemPath = path + '[' + idx + ']';
+                const comma = idx < obj.length - 1 ? ',' : '';
+                const itemLines = buildJSONLines(item, itemPath, indent + 1);
+                
+                itemLines.forEach((line, lineIdx) => {
+                    if (lineIdx === itemLines.length - 1) {
+                        line.text += comma;
+                    }
+                    if (allPrimitive && line.isPrimitive) {
+                        line.arrayPath = arrayPath;
+                        line.arrayValue = item;
+                    }
+                    lines.push(line);
+                });
+            });
+            
+            lines.push({ 
+                text: ']', 
+                indent: indent, 
+                path: path, 
+                type: 'close-array' 
+            });
+        } else {
+            lines.push({ 
+                text: '{', 
+                indent: indent, 
+                path: path, 
+                type: 'open-object' 
+            });
+            
+            const keys = Object.keys(obj).sort();
+            keys.forEach((key, idx) => {
+                const keyPath = path ? path + '.' + key : key;
+                const value = obj[key];
+                const comma = idx < keys.length - 1 ? ',' : '';
+                
+                if (typeof value === 'object' && value !== null) {
+                    lines.push({
+                        text: '"' + key + '": ',
+                        indent: indent + 1,
+                        path: keyPath,
+                        type: 'key'
+                    });
+                    const valueLines = buildJSONLines(value, keyPath, indent + 1);
+                    valueLines.forEach((line, lineIdx) => {
+                        if (lineIdx === valueLines.length - 1) {
+                            line.text += comma;
+                        }
+                        lines.push(line);
+                    });
+                } else {
+                    lines.push({
+                        text: '"' + key + '": ' + JSON.stringify(value) + comma,
+                        indent: indent + 1,
+                        path: keyPath,
+                        isPrimitive: true,
+                        value: value
+                    });
+                }
+            });
+            
+            lines.push({ 
+                text: '}', 
+                indent: indent, 
+                path: path, 
+                type: 'close-object' 
             });
         }
         
-        return {
-            results: comparisonResults,
-            totalMismatches: mismatchCount,
-            totalExempted: exemptedCount,
-            totalLines: maxLines
-        };
+        return lines;
     }
-
-    const comparison = compareLineByLine(boomiLines, mulesoftLines, exemptedFields);
-
-    console.log("Comparison: " + comparison.totalMismatches + " mismatches, " + comparison.totalExempted + " exempted");
-
-    pm.test("Boomi API responded", function() {
-        pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]);
+    
+    const boomiLines = buildJSONLines(boomiNorm, '', 0);
+    const muleLines = buildJSONLines(muleNorm, '', 0);
+    
+    // LCS-based alignment for primitive arrays
+    function alignPrimitiveArrays(bLines, mLines) {
+        const arrayGroups = {};
+        
+        // Group array elements by their parent array path
+        bLines.forEach((line, idx) => {
+            if (line.arrayPath) {
+                if (!arrayGroups[line.arrayPath]) {
+                    arrayGroups[line.arrayPath] = { boomi: [], mule: [] };
+                }
+                arrayGroups[line.arrayPath].boomi.push({ line, idx });
+            }
+        });
+        
+        mLines.forEach((line, idx) => {
+            if (line.arrayPath) {
+                if (!arrayGroups[line.arrayPath]) {
+                    arrayGroups[line.arrayPath] = { boomi: [], mule: [] };
+                }
+                arrayGroups[line.arrayPath].mule.push({ line, idx });
+            }
+        });
+        
+        const alignmentMap = { boomi: new Map(), mule: new Map() };
+        
+        // For each array, create alignment using LCS approach
+        Object.keys(arrayGroups).forEach(arrayPath => {
+            const bItems = arrayGroups[arrayPath].boomi;
+            const mItems = arrayGroups[arrayPath].mule;
+            
+            const bValues = bItems.map(item => item.line.arrayValue);
+            const mValues = mItems.map(item => item.line.arrayValue);
+            
+            // Simple LCS alignment
+            const aligned = [];
+            let bIdx = 0;
+            let mIdx = 0;
+            
+            while (bIdx < bValues.length || mIdx < mValues.length) {
+                if (bIdx >= bValues.length) {
+                    // Only mule remaining
+                    aligned.push({ bIdx: null, mIdx: mIdx });
+                    mIdx++;
+                } else if (mIdx >= mValues.length) {
+                    // Only boomi remaining
+                    aligned.push({ bIdx: bIdx, mIdx: null });
+                    bIdx++;
+                } else if (bValues[bIdx] === mValues[mIdx]) {
+                    // Match
+                    aligned.push({ bIdx: bIdx, mIdx: mIdx });
+                    bIdx++;
+                    mIdx++;
+                } else {
+                    // Check if current boomi exists ahead in mule
+                    let foundInMule = -1;
+                    for (let i = mIdx + 1; i < Math.min(mIdx + 10, mValues.length); i++) {
+                        if (bValues[bIdx] === mValues[i]) {
+                            foundInMule = i;
+                            break;
+                        }
+                    }
+                    
+                    // Check if current mule exists ahead in boomi
+                    let foundInBoomi = -1;
+                    for (let i = bIdx + 1; i < Math.min(bIdx + 10, bValues.length); i++) {
+                        if (mValues[mIdx] === bValues[i]) {
+                            foundInBoomi = i;
+                            break;
+                        }
+                    }
+                    
+                    if (foundInMule === -1 && foundInBoomi === -1) {
+                        // Both only exist in their respective arrays
+                        aligned.push({ bIdx: bIdx, mIdx: null });
+                        aligned.push({ bIdx: null, mIdx: mIdx });
+                        bIdx++;
+                        mIdx++;
+                    } else if (foundInMule !== -1 && (foundInBoomi === -1 || (foundInMule - mIdx) <= (foundInBoomi - bIdx))) {
+                        // Current mule is unique, advance it
+                        aligned.push({ bIdx: null, mIdx: mIdx });
+                        mIdx++;
+                    } else {
+                        // Current boomi is unique, advance it
+                        aligned.push({ bIdx: bIdx, mIdx: null });
+                        bIdx++;
+                    }
+                }
+            }
+            
+            // Create mapping
+            aligned.forEach(pair => {
+                if (pair.bIdx !== null && pair.mIdx !== null) {
+                    alignmentMap.boomi.set(bItems[pair.bIdx].idx, mItems[pair.mIdx].idx);
+                    alignmentMap.mule.set(mItems[pair.mIdx].idx, bItems[pair.bIdx].idx);
+                }
+            });
+        });
+        
+        return alignmentMap;
+    }
+    
+    const arrayAlignment = alignPrimitiveArrays(boomiLines, muleLines);
+    
+    // Smart alignment with array awareness
+    function alignWithArrays(leftLines, rightLines, arrayMap) {
+        const aligned = [];
+        let leftIdx = 0;
+        let rightIdx = 0;
+        
+        while (leftIdx < leftLines.length || rightIdx < rightLines.length) {
+            const leftLine = leftLines[leftIdx];
+            const rightLine = rightLines[rightIdx];
+            
+            if (!leftLine && rightLine) {
+                aligned.push({
+                    boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
+                    mule: rightLine,
+                    status: 'only_mule'
+                });
+                rightIdx++;
+            } else if (leftLine && !rightLine) {
+                aligned.push({
+                    boomi: leftLine,
+                    mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
+                    status: 'only_boomi'
+                });
+                leftIdx++;
+            } else {
+                // Check if this is a mapped array element
+                const mappedRight = arrayMap.boomi.get(leftIdx);
+                const mappedLeft = arrayMap.mule.get(rightIdx);
+                
+                if (mappedRight === rightIdx) {
+                    // Aligned array elements
+                    aligned.push({
+                        boomi: leftLine,
+                        mule: rightLine,
+                        status: 'match'
+                    });
+                    leftIdx++;
+                    rightIdx++;
+                } else if (leftLine.arrayPath && !mappedRight) {
+                    // Unmatched left array element
+                    aligned.push({
+                        boomi: leftLine,
+                        mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
+                        status: 'only_boomi'
+                    });
+                    leftIdx++;
+                } else if (rightLine.arrayPath && !mappedLeft) {
+                    // Unmatched right array element
+                    aligned.push({
+                        boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
+                        mule: rightLine,
+                        status: 'only_mule'
+                    });
+                    rightIdx++;
+                } else if (leftLine.path === rightLine.path && leftLine.type === rightLine.type) {
+                    // Regular path match
+                    let status = 'match';
+                    if (leftLine.text !== rightLine.text && !leftLine.type) {
+                        status = 'mismatch';
+                    }
+                    
+                    aligned.push({
+                        boomi: leftLine,
+                        mule: rightLine,
+                        status: status
+                    });
+                    leftIdx++;
+                    rightIdx++;
+                } else {
+                    // Different paths - determine which to advance
+                    let rightHasPath = false;
+                    for (let i = rightIdx + 1; i < Math.min(rightIdx + 30, rightLines.length); i++) {
+                        if (rightLines[i].path === leftLine.path && rightLines[i].type === leftLine.type) {
+                            rightHasPath = true;
+                            break;
+                        }
+                    }
+                    
+                    let leftHasPath = false;
+                    for (let i = leftIdx + 1; i < Math.min(leftIdx + 30, leftLines.length); i++) {
+                        if (leftLines[i].path === rightLine.path && leftLines[i].type === rightLine.type) {
+                            leftHasPath = true;
+                            break;
+                        }
+                    }
+                    
+                    if (!rightHasPath) {
+                        aligned.push({
+                            boomi: leftLine,
+                            mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
+                            status: 'only_boomi'
+                        });
+                        leftIdx++;
+                    } else if (!leftHasPath) {
+                        aligned.push({
+                            boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
+                            mule: rightLine,
+                            status: 'only_mule'
+                        });
+                        rightIdx++;
+                    } else {
+                        // Both exist - advance based on path comparison
+                        if (leftLine.path < rightLine.path) {
+                            aligned.push({
+                                boomi: leftLine,
+                                mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
+                                status: 'only_boomi'
+                            });
+                            leftIdx++;
+                        } else {
+                            aligned.push({
+                                boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
+                                mule: rightLine,
+                                status: 'only_mule'
+                            });
+                            rightIdx++;
+                        }
+                    }
+                }
+            }
+        }
+        
+        return aligned;
+    }
+    
+    const aligned = alignWithArrays(boomiLines, muleLines, arrayAlignment);
+    
+    // Calculate stats
+    let totalMismatches = 0;
+    let totalExempted = 0;
+    
+    aligned.forEach(pair => {
+        const path = pair.boomi.path || pair.mule.path;
+        let isExempted = false;
+        
+        if (path) {
+            for (let j = 0; j < exemptedFields.length; j++) {
+                if (path.includes(exemptedFields[j])) {
+                    pair.status = 'exempted';
+                    isExempted = true;
+                    totalExempted++;
+                    break;
+                }
+            }
+        }
+        
+        if (!isExempted && (pair.status === 'mismatch' || pair.status === 'only_boomi' || pair.status === 'only_mule')) {
+            totalMismatches++;
+        }
     });
+    
+    const totalLines = aligned.length;
 
-    pm.test("MuleSoft API responded", function() {
-        pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]);
-    });
+    console.log("Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
 
-    pm.test("Line counts match", function() {
-        pm.expect(boomiLines.length).to.equal(mulesoftLines.length);
-    });
+    // Tests
+    pm.test("Boomi API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]));
+    pm.test("MuleSoft API responded", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]));
+    pm.test("All non-exempted fields match", () => pm.expect(totalMismatches).to.equal(0));
 
-    pm.test("All non-exempted lines match", function() {
-        pm.expect(comparison.totalMismatches).to.equal(0);
-    });
+    const matchPercentage = totalLines > 0 ? Math.round(((totalLines - totalMismatches - totalExempted) / totalLines) * 100) : 100;
+    const statusText = totalMismatches > 0 ? 'FAILED' : 'PASSED';
 
-    const matchPercentage = comparison.totalLines > 0 ? Math.round(((comparison.totalLines - comparison.totalMismatches - comparison.totalExempted) / comparison.totalLines) * 100) : 100;
-    const statusText = comparison.totalMismatches > 0 ? 'FAILED' : 'PASSED';
-
-    function minifyResponse(responseText) {
-        if (!responseText) return "";
-        try {
-            return JSON.stringify(JSON.parse(responseText.trim()));
-        } catch (e) {
-            return responseText.trim().substring(0, 1000);
+        // Store report data - NO TRUNCATION ANYWHERE
+    function minifyResponse(text) {
+        if (!text) return "";
+        try { 
+            // Minify JSON but don't truncate
+            return JSON.stringify(JSON.parse(text.trim()));
+        } catch (e) { 
+            // If not JSON, return as-is without truncation
+            return text.trim();
         }
     }
 
     const statsObj = {
-        totalLines: comparison.totalLines,
-        matchedLines: comparison.totalLines - comparison.totalMismatches - comparison.totalExempted,
-        mismatchedLines: comparison.totalMismatches,
-        exemptedLines: comparison.totalExempted,
+        totalLines: totalLines,
+        matchedLines: totalLines - totalMismatches - totalExempted,
+        mismatchedLines: totalMismatches,
+        exemptedLines: totalExempted,
         matchPercentage: matchPercentage,
         status: statusText,
         boomiStatus: boomiStatus,
@@ -184,38 +478,122 @@ function executeComparison() {
     const reportEntry = {
         serialNumber: parseInt(reportIndex),
         requestName: requestName,
-        curlCommand: curlCommand,
+        curlCommand: curlCommand,  // FULL cURL stored here
         boomiResponse: minifyResponse(boomiResponseRaw),
         mulesoftResponse: minifyResponse(mulesoftResponseRaw),
         statistics: statsObj
     };
 
     const paddedIndex = reportIndex.padStart(3, '0');
+    
+    // Store with full data
     pm.collectionVariables.set("report_data_" + paddedIndex, JSON.stringify(reportEntry));
+    
+    console.log("Report stored with cURL length: " + curlCommand.length);
 
     pm.collectionVariables.set("temp_request_name", "");
     pm.collectionVariables.set("temp_request_curl", "");
 
-    // Show visualizer ONLY for individual execution
+
+
+    // Visualizer
     if (isIndividualExecution) {
-        console.log("Rendering visualizer with " + comparison.results.length + " lines");
+        console.log("Rendering side-by-side JSON visualizer");
         
-        let tableRows = '';
-        for (let i = 0; i < comparison.results.length; i++) {
-            const row = comparison.results[i];
-            const rowClass = row.status === 'exempted' ? 'exempted' : (row.status === 'mismatch' ? 'mismatch' : 'match');
-            const boomiText = row.boomiLine || '<span class="empty">(empty)</span>';
-            const mulesoftText = row.mulesoftLine || '<span class="empty">(empty)</span>';
-            tableRows += '<tr class="' + rowClass + '"><td>' + row.lineNumber + '</td><td>' + boomiText + '</td><td>' + mulesoftText + '</td></tr>';
-        }
-        
-        const headerBg = comparison.totalMismatches > 0 ? '#c0392b' : '#27ae60';
-        
-        const html = '<!DOCTYPE html><html><head><meta charset="UTF-8"><style>*{margin:0;padding:0;box-sizing:border-box}body{font-family:Arial,sans-serif;font-size:12px;padding:15px;background:#f5f5f5}.header{background:' + headerBg + ';color:#fff;padding:15px;border-radius:4px;margin-bottom:15px}.header h2{font-size:16px;margin-bottom:8px}.stats{display:flex;gap:20px;font-size:11px;flex-wrap:wrap}.stats div{display:flex;align-items:center;gap:5px}.stats .label{opacity:0.9}.stats .value{font-weight:bold;font-size:13px}.legend{background:#fff;padding:12px;border-radius:4px;margin-bottom:15px;display:flex;gap:15px;align-items:center;font-size:11px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}.legend-title{font-weight:bold;color:#333}.legend-item{display:flex;align-items:center;gap:6px}.legend-box{width:20px;height:14px;border:1px solid #ddd;border-radius:2px}.legend-box.match{background:#fff}.legend-box.mismatch{background:#ffebee}.legend-box.exempted{background:#fff3cd}.table-container{background:#fff;border-radius:4px;overflow:auto;max-height:70vh;box-shadow:0 1px 3px rgba(0,0,0,0.1)}table{width:100%;border-collapse:collapse;font-size:11px}thead{position:sticky;top:0;background:#34495e;color:#fff;z-index:10}th{padding:10px 8px;text-align:left;font-weight:600;font-size:10px;border-right:1px solid #2c3e50}th:first-child{width:50px;text-align:center}td{padding:8px;border-bottom:1px solid #ecf0f1;border-right:1px solid #ecf0f1;font-family:Consolas,monospace;font-size:11px;vertical-align:top;word-break:break-all}td:first-child{text-align:center;font-weight:bold;background:#f8f9fa;font-family:Arial,sans-serif}tr.match{background:#fff}tr.mismatch{background:#ffebee}tr.mismatch td:first-child{background:#ffcdd2;color:#c0392b}tr.exempted{background:#fff3cd}tr.exempted td:first-child{background:#ffecb3;color:#f57c00}tr:hover td{opacity:0.9}.empty{color:#95a5a6;font-style:italic}.signature{text-align:right;margin-top:10px;font-size:9px;color:#95a5a6;font-style:italic}</style></head><body><div class="header"><h2>Response Comparison: ' + requestName + '</h2><div class="stats"><div><span class="label">Lines:</span><span class="value">' + comparison.totalLines + '</span></div><div><span class="label">Mismatched:</span><span class="value">' + comparison.totalMismatches + '</span></div><div><span class="label">Exempted:</span><span class="value">' + comparison.totalExempted + '</span></div><div><span class="label">Match:</span><span class="value">' + matchPercentage + '%</span></div><div><span class="label">Status:</span><span class="value">' + statusText + '</span></div></div></div><div class="legend"><span class="legend-title">Legend:</span><div class="legend-item"><div class="legend-box match"></div><span>Match</span></div><div class="legend-item"><div class="legend-box mismatch"></div><span>Mismatch</span></div><div class="legend-item"><div class="legend-box exempted"></div><span>Exempted</span></div></div><div class="table-container"><table><thead><tr><th>Line</th><th>Boomi Response</th><th>MuleSoft Response</th></tr></thead><tbody>' + tableRows + '</tbody></table></div><div class="signature">S. 2025</div></body></html>';
+        let tableRows = aligned.map(pair => {
+            const bLine = pair.boomi;
+            const mLine = pair.mule;
+            const status = pair.status;
+            
+            const bIndent = bLine.indent * 16;
+            const mIndent = mLine.indent * 16;
+            
+            const bText = bLine.isEmpty ? '' : bLine.text;
+            const mText = mLine.isEmpty ? '' : mLine.text;
+            
+            let pointer = '';
+            if (status === 'mismatch') pointer = '↔';
+            else if (status === 'only_boomi') pointer = '→';
+            else if (status === 'only_mule') pointer = '←';
+            
+            return `<tr class="${status}">
+                <td style="padding-left:${bIndent}px">${bText || '<span class="empty">&nbsp;</span>'}</td>
+                <td class="pointer">${pointer}</td>
+                <td style="padding-left:${mIndent}px">${mText || '<span class="empty">&nbsp;</span>'}</td>
+            </tr>`;
+        }).join("");
+
+        const headerBg = totalMismatches > 0 ? '#c0392b' : '#27ae60';
+
+        const html = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{font-family:Arial,sans-serif;font-size:12px;padding:15px;background:#f5f5f5}
+.header{background:${headerBg};color:#fff;padding:15px;border-radius:4px;margin-bottom:15px}
+.header h2{font-size:16px;margin-bottom:8px}
+.stats{display:flex;gap:20px;font-size:11px;flex-wrap:wrap}
+.stats div{display:flex;align-items:center;gap:5px}
+.stats .label{opacity:0.9}
+.stats .value{font-weight:bold;font-size:13px}
+.legend{background:#fff;padding:12px;border-radius:4px;margin-bottom:15px;display:flex;gap:15px;align-items:center;font-size:11px;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+.legend-title{font-weight:bold;color:#333}
+.legend-item{display:flex;align-items:center;gap:6px}
+.legend-box{width:20px;height:14px;border:1px solid #ddd;border-radius:2px}
+.legend-box.match{background:#fff}
+.legend-box.mismatch{background:#ffebee}
+.legend-box.exempted{background:#fff3cd}
+.legend-box.only_boomi{background:#fffde7}
+.legend-box.only_mule{background:#e3f2fd}
+.table-container{background:#fff;border-radius:4px;overflow:auto;max-height:70vh;box-shadow:0 1px 3px rgba(0,0,0,0.1)}
+table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed}
+thead{position:sticky;top:0;background:#34495e;color:#fff;z-index:10}
+th{padding:10px 8px;text-align:left;font-weight:600;font-size:10px;border-right:1px solid #2c3e50}
+th:first-child{width:47%}
+th:nth-child(2){width:6%;text-align:center}
+th:last-child{width:47%}
+td{padding:4px 8px;border-bottom:1px solid #ecf0f1;border-right:1px solid #ecf0f1;font-family:Consolas,Monaco,monospace;font-size:11px;vertical-align:top;word-wrap:break-word;white-space:pre-wrap;line-height:1.4;max-width:480px}
+.pointer{text-align:center;font-size:14px;font-family:Arial;white-space:normal}
+tr.match{background:#fff}
+tr.mismatch{background:#ffebee}
+tr.exempted{background:#fff3cd}
+tr.only_boomi{background:#fffde7}
+tr.only_mule{background:#e3f2fd}
+tr:hover{background:#f1f8e9}
+.empty{color:#ddd}
+.signature{text-align:right;margin-top:10px;font-size:9px;color:#95a5a6;font-style:italic}
+</style>
+</head>
+<body>
+<div class="header">
+<h2>Response Comparison: ${requestName}</h2>
+<div class="stats">
+<div><span class="label">Lines:</span><span class="value">${totalLines}</span></div>
+<div><span class="label">Mismatched:</span><span class="value">${totalMismatches}</span></div>
+<div><span class="label">Exempted:</span><span class="value">${totalExempted}</span></div>
+<div><span class="label">Match:</span><span class="value">${matchPercentage}%</span></div>
+<div><span class="label">Status:</span><span class="value">${statusText}</span></div>
+</div>
+</div>
+<div class="legend">
+<span class="legend-title">Legend:</span>
+<div class="legend-item"><div class="legend-box match"></div><span>Match</span></div>
+<div class="legend-item"><div class="legend-box mismatch"></div><span>Mismatch</span></div>
+<div class="legend-item"><div class="legend-box exempted"></div><span>Exempted</span></div>
+<div class="legend-item"><div class="legend-box only_boomi"></div><span>Only Boomi</span></div>
+<div class="legend-item"><div class="legend-box only_mule"></div><span>Only Mule</span></div>
+</div>
+<div class="table-container">
+<table>
+<thead><tr><th>Boomi JSON</th><th></th><th>MuleSoft JSON</th></tr></thead>
+<tbody>${tableRows}</tbody>
+</table>
+</div>
+<div class="signature">S. 2025</div>
+</body>
+</html>`;
         
         pm.visualizer.set(html);
-        console.log("Visualizer set successfully");
-    } else {
-        console.log("Collection Runner - skipping visualizer");
+        console.log("Visualizer rendered with LCS array alignment");
     }
 }
