@@ -31,25 +31,35 @@ function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
     try {
         const fullUrl = requestUrl.toString();
         
-        // Extract origin (https://host:port)
-        const muleOrigin = muleBase.match(/^https?:\/\/[^\/]+/)[0];
+        // Extract just the hostname from mule base (no port)
+        const muleHost = muleBase.match(/^https?:\/\/([^\/]+)/)[1];
+        
+        // Build pattern to match mule base with optional port
+        const pattern = new RegExp('^(https?:\/\/' + muleHost.replace(/\./g, '\\.') + '(?::\\d+)?)');
+        const match = fullUrl.match(pattern);
+        
+        if (!match) {
+            console.error("URL doesn't match mule base");
+            return null;
+        }
+        
+        // Get the mule origin (with or without port from actual URL)
+        const muleOrigin = match[1];
+        
+        // Get boomi origin
         const boomiOrigin = boomiBase.match(/^https?:\/\/[^\/]+/)[0];
         
-        // Remove mule origin
+        // Remove mule origin and service name
         let path = fullUrl.substring(muleOrigin.length);
-        
-        // Remove the service name (first segment after /) but keep if it's not a service name
-        // Only remove if it contains the pattern like 'vc-cxt-billing-eapi-dev'
-        path = path.replace(/^\/([^\/?]+)(\/ws\/rest\/)/, '/ws/rest/');
+        path = path.replace(/^\/[^\/]+\/ws\/rest\//, '/ws/rest/');
         
         return boomiOrigin + path;
         
     } catch (error) {
-        console.error("URL transform failed: " + error.message);
+        console.error("Transform failed: " + error.message);
         return null;
     }
 }
-
 
 const boomiUrl = transformMuleUrlToBoomi(requestUrl, muleBaseUrl, boomiBaseUrl);
 
