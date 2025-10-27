@@ -26,32 +26,30 @@ if (!muleBaseUrl || !boomiBaseUrl) {
 const currentRequest = pm.request;
 const method = currentRequest.method;
 const requestUrl = pm.request.url;
+
 function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
     try {
         const fullUrl = requestUrl.toString();
         
-        // Extract origins (protocol://host:port)
+        // Extract origin (https://host:port)
         const muleOrigin = muleBase.match(/^https?:\/\/[^\/]+/)[0];
         const boomiOrigin = boomiBase.match(/^https?:\/\/[^\/]+/)[0];
-        
-        console.log("Mule: " + fullUrl);
         
         // Remove mule origin
         let path = fullUrl.substring(muleOrigin.length);
         
-        // Remove everything before /ws/ (the service name)
-        path = path.replace(/^\/[^\/]+(?=\/ws\/)/, '');
+        // Remove the service name (first segment after /) but keep if it's not a service name
+        // Only remove if it contains the pattern like 'vc-cxt-billing-eapi-dev'
+        path = path.replace(/^\/([^\/?]+)(\/ws\/rest\/)/, '/ws/rest/');
         
-        const result = boomiOrigin + path;
-        console.log("Boomi: " + result);
-        
-        return result;
+        return boomiOrigin + path;
         
     } catch (error) {
-        console.error("Transform error: " + error.message);
+        console.error("URL transform failed: " + error.message);
         return null;
     }
 }
+
 
 const boomiUrl = transformMuleUrlToBoomi(requestUrl, muleBaseUrl, boomiBaseUrl);
 
