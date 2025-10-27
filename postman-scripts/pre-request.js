@@ -26,41 +26,29 @@ if (!muleBaseUrl || !boomiBaseUrl) {
 const currentRequest = pm.request;
 const method = currentRequest.method;
 const requestUrl = pm.request.url;
-
 function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
     try {
         const fullUrl = requestUrl.toString();
         
-        // Extract protocol://host:port (handles with or without port)
+        // Extract origins (protocol://host:port)
         const muleOrigin = muleBase.match(/^https?:\/\/[^\/]+/)[0];
         const boomiOrigin = boomiBase.match(/^https?:\/\/[^\/]+/)[0];
         
-        console.log("Mule origin: " + muleOrigin);
-        console.log("Boomi origin: " + boomiOrigin);
-        console.log("Full URL: " + fullUrl);
+        console.log("Mule: " + fullUrl);
         
-        // Remove mule origin and get path + query
-        let pathAndQuery = fullUrl.substring(muleOrigin.length);
-        console.log("Path+Query: " + pathAndQuery);
+        // Remove mule origin
+        let path = fullUrl.substring(muleOrigin.length);
         
-        // Remove first path segment (app name) if it's not an API keyword
-        pathAndQuery = pathAndQuery.replace(/^\/([^\/\?]+)(\/|\?|$)/, function(match, segment, separator) {
-            const apiKeywords = /^(ws|api|rest|v\d+|services)$/i;
-            if (apiKeywords.test(segment)) {
-                console.log("Keeping: " + segment);
-                return match;
-            } else {
-                console.log("Removing: " + segment);
-                return separator;
-            }
-        });
+        // Remove everything before /ws/ (the service name)
+        path = path.replace(/^\/[^\/]+(?=\/ws\/)/, '');
         
-        console.log("Final path: " + pathAndQuery);
+        const result = boomiOrigin + path;
+        console.log("Boomi: " + result);
         
-        return boomiOrigin + pathAndQuery;
+        return result;
         
     } catch (error) {
-        console.error("Transform failed: " + error.message);
+        console.error("Transform error: " + error.message);
         return null;
     }
 }
