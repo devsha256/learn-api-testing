@@ -5,108 +5,88 @@ const PORT = 8000;
 // Middleware to parse JSON bodies in POST requests
 app.use(express.json());
 
-// --- EXISTING ENDPOINTS ---
+// XML response template for the SOAP endpoints
+const customerXmlResponse = `
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+    <soap:Body>
+        <getCustomerResponse xmlns="http://example.com/customer">
+            <Customer>
+                <id>CUST-001</id>
+                <name>Acme Corp.</name>
+                <status>Active</status>
+                <isActive>true</isActive>
+                <billingAddress>
+                    <street>123 Integration Way</street>
+                    <city>MuleCity</city>
+                    <zip>90210</zip>
+                </billingAddress>
+                <orders>
+                  <order>
+                    <Id>OZ001</Id>
+                    <ProductId>PZ0001</ProductId>
+                    <ProductName>PP1</ProductName>
+                  </order>
+                  <order>
+                    <Id>OZ002</Id>
+                    <ProductId>PZ0002</ProductId>
+                    <ProductName>PP2</ProductName>
+                  </order>
+                </orders>
+            </Customer>
+        </getCustomerResponse>
+    </soap:Body>
+</soap:Envelope>
+`.trim(); // .trim() removes leading/trailing whitespace
 
-// GET /users/:userId - fetches from GitHub API
-app.get('/users/:userId', async (req, res) => {
-  const userId = req.params.userId;
-  
-  try {
-    // Note: 'fetch' is usually available in modern Node.js environments
-    const response = await fetch(`https://api.github.com/users/${userId}`, {
-      headers: {
-        'User-Agent': 'Express-App'
-      }
-    });
-    
-    if (!response.ok) {
-      return res.status(response.status).json({ 
-        error: 'User not found or API error' 
-      });
-    }
-    
-    const userData = await response.json();
-    res.json(userData);
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Failed to fetch user data',
-      message: error.message 
-    });
-  }
+// XML response template for the SOAP endpoints
+const customerV2XmlResponse = `
+<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
+    <soap:Body>
+        <getCustomerResponse xmlns="http://example.com/customer">
+            <Customer>
+                <id>CUST-001</id>
+                <name>Acme Corp.</name>
+                <status>Active</status>
+                <billingAddress>
+                    <street>123 Integration Way</street>
+                    <city>MuleCity</city>
+                    <zip>90210</zip>
+                </billingAddress>
+                <gender>male</gender>
+                <orders>
+                  <order>
+                    <Id>OZ001</Id>
+                    <ProductId>PZ0001</ProductId>
+                    <ProductName>PP1</ProductName>
+                  </order>
+                  <order>
+                    <Id>OZ003</Id>
+                    <ProductId>PZ0003</ProductId>
+                    <ProductName>PP3</ProductName>
+                  </order>
+                </orders>
+            </Customer>
+        </getCustomerResponse>
+    </soap:Body>
+</soap:Envelope>
+`.trim(); // .trim() removes leading/trailing whitespace
+
+// --- NEW SOAP ENDPOINTS ---
+
+// GET /app/customer - Returns XML/SOAP response
+app.get('/app/ws/soap/customer', (req, res) => {
+    console.log('[GET /app/customer] Sending XML response.');
+    res.set('Content-Type', 'application/xml');
+    res.status(200).send(customerV2XmlResponse);
 });
 
-// GET /app/users/:userId - fetches from GitHub API
-app.get('/app/users/:userId', async (req, res) => {
-  const userId = req.params.userId;
-  
-  try {
-    const response = await fetch(`https://api.github.com/users/${userId}`, {
-      headers: {
-        'User-Agent': 'Express-App'
-      }
-    });
-    
-    if (!response.ok) {
-      return res.status(response.status).json({ 
-        error: 'User not found or API error' 
-      });
-    }
-    
-    const userData = await response.json();
-    res.json(userData);
-  } catch (error) {
-    res.status(500).json({ 
-      error: 'Failed to fetch user data',
-      message: error.message 
-    });
-  }
+// GET /customer (Using the exact path requested) - Returns XML/SOAP response
+app.get('/ws/soap/customer', (req, res) => {
+    console.log('[GET /customer] Sending XML response.');
+    res.set('Content-Type', 'application/xml');
+    res.status(200).send(customerXmlResponse);
 });
 
-// --- NEW ENDPOINTS ADDED BELOW ---
-
-// POST /app/user - Creates a new user resource
-app.post('/app/user', (req, res) => {
-    const correlationId = req.header('x-correlation-id');
-    const userPayload = req.body; // JSON body is available here
-
-    console.log(`[POST /app/user] Correlation ID: ${correlationId}`);
-    console.log(`[POST /app/user] Received Payload:`, userPayload);
-
-    // Dummy logic: Assume the user creation was successful
-    if (!userPayload || !userPayload.username) {
-        return res.status(400).json({
-            status: 'Failed',
-            message: 'Invalid request: username is required in the body.'
-        });
-    }
-    
-    res.status(201).json({
-        status: 'Success',
-        message: `User '${userPayload.username}' created successfully via /app/user. Correlation ID: ${correlationId}`
-    });
-});
-
-// POST /user - Creates a new user resource
-app.post('/user', (req, res) => {
-    const correlationId = req.header('x-correlation-id');
-    const userPayload = req.body;
-
-    console.log(`[POST /user] Correlation ID: ${correlationId}`);
-    console.log(`[POST /user] Received Payload:`, userPayload);
-
-    // Dummy logic: Simulate a successful response
-    if (!userPayload || !userPayload.email) {
-        return res.status(400).json({
-            status: 'Failed',
-            message: 'Invalid request: email is required in the body.'
-        });
-    }
-
-    res.status(201).json({
-        status: 'Success',
-        message: `User '${userPayload.username}' created successfully via /app/user. Correlation ID: ${correlationId}`
-    });
-});
 
 
 // Start the server

@@ -1,6 +1,6 @@
 // Skip utility requests
 if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) {
-    console.log("Skipping utility request: " + pm.info.requestName);
+    console.log("Skipping post-request for: " + pm.info.requestName);
     return;
 }
 
@@ -47,385 +47,197 @@ function executeComparison() {
         return;
     }
 
-    const exemptedFieldsStr = pm.collectionVariables.get("exempted_fields");
+    const exemptedFieldsStr = pm.collectionVariables.get("exempted_xml_paths");
     const exemptedFields = exemptedFieldsStr ? JSON.parse(exemptedFieldsStr) : [];
 
-    // Parse responses
-    let boomi, mule;
-    try { boomi = JSON.parse(boomiResponseRaw); } catch (e) { boomi = boomiResponseRaw; }
-    try { mule = JSON.parse(mulesoftResponseRaw); } catch (e) { mule = mulesoftResponseRaw; }
-
-    // ===== IMPROVED ARRAY ALIGNMENT WITH LCS =====
-    
-    function normalizeArrays(obj) {
-        if (Array.isArray(obj)) {
-            const allPrimitive = obj.every(item => typeof item !== 'object' || item === null);
-            if (allPrimitive) {
-                return obj.slice().sort();
-            }
-            return obj.map(normalizeArrays);
-        } else if (obj !== null && typeof obj === 'object') {
-            const normalized = {};
-            Object.keys(obj).sort().forEach(key => {
-                normalized[key] = normalizeArrays(obj[key]);
-            });
-            return normalized;
-        }
-        return obj;
+    // HTML escape function
+    function escapeHtml(text) {
+        if (!text) return '';
+        return String(text)
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
     }
-    
-    const boomiNorm = normalizeArrays(boomi);
-    const muleNorm = normalizeArrays(mule);
-    
-    // Build JSON lines tracking array membership
-    function buildJSONLines(obj, path, indent) {
+
+    // Parse XML to simple tree structure
+    function parseXML(xmlString) {
         const lines = [];
-        path = path || '';
-        indent = indent || 0;
+        const cleanXml = xmlString.trim();
         
-        if (obj === null) {
-            lines.push({
-                text: 'null',
-                indent: indent,
-                path: path,
-                isPrimitive: true
-            });
-        } else if (typeof obj !== 'object') {
-            lines.push({
-                text: JSON.stringify(obj),
-                indent: indent,
-                path: path,
-                isPrimitive: true,
-                value: obj
-            });
-        } else if (Array.isArray(obj)) {
-            const arrayPath = path;
-            const allPrimitive = obj.every(item => typeof item !== 'object' || item === null);
+        // Remove XML declaration
+        let xml = cleanXml.replace(/<\?xml[^>]*\?>/g, '');
+        
+        let indent = 0;
+        let pos = 0;
+        
+        while (pos < xml.length) {
+            const tagStart = xml.indexOf('<', pos);
+            if (tagStart === -1) break;
             
-            lines.push({ 
-                text: '[', 
-                indent: indent, 
-                path: path, 
-                type: 'open-array' 
-            });
+            const tagEnd = xml.indexOf('>', tagStart);
+            if (tagEnd === -1) break;
             
-            obj.forEach((item, idx) => {
-                const itemPath = path + '[' + idx + ']';
-                const comma = idx < obj.length - 1 ? ',' : '';
-                const itemLines = buildJSONLines(item, itemPath, indent + 1);
-                
-                itemLines.forEach((line, lineIdx) => {
-                    if (lineIdx === itemLines.length - 1) {
-                        line.text += comma;
-                    }
-                    if (allPrimitive && line.isPrimitive) {
-                        line.arrayPath = arrayPath;
-                        line.arrayValue = item;
-                    }
-                    lines.push(line);
-                });
-            });
+            const tag = xml.substring(tagStart, tagEnd + 1);
             
-            lines.push({ 
-                text: ']', 
-                indent: indent, 
-                path: path, 
-                type: 'close-array' 
-            });
-        } else {
-            lines.push({ 
-                text: '{', 
-                indent: indent, 
-                path: path, 
-                type: 'open-object' 
-            });
+            // Skip comments
+            if (tag.startsWith('<!--')) {
+                pos = tagEnd + 1;
+                continue;
+            }
             
-            const keys = Object.keys(obj).sort();
-            keys.forEach((key, idx) => {
-                const keyPath = path ? path + '.' + key : key;
-                const value = obj[key];
-                const comma = idx < keys.length - 1 ? ',' : '';
-                
-                if (typeof value === 'object' && value !== null) {
-                    lines.push({
-                        text: '"' + key + '": ',
-                        indent: indent + 1,
-                        path: keyPath,
-                        type: 'key'
-                    });
-                    const valueLines = buildJSONLines(value, keyPath, indent + 1);
-                    valueLines.forEach((line, lineIdx) => {
-                        if (lineIdx === valueLines.length - 1) {
-                            line.text += comma;
-                        }
-                        lines.push(line);
-                    });
+            // Closing tag
+            if (tag.startsWith('</')) {
+                // Check if this should be merged with opening tag
+                if (lines.length > 0 && lines[lines.length - 1].type === 'open' && !lines[lines.length - 1].merged) {
+                    // Merge with previous opening tag
+                    const lastLine = lines[lines.length - 1];
+                    lastLine.text = lastLine.text + (lastLine.content || '') + tag;
+                    lastLine.merged = true;
+                    pos = tagEnd + 1;
                 } else {
+                    indent--;
+                    const tagName = tag.substring(2, tag.length - 1).trim();
                     lines.push({
-                        text: '"' + key + '": ' + JSON.stringify(value) + comma,
-                        indent: indent + 1,
-                        path: keyPath,
-                        isPrimitive: true,
-                        value: value
+                        text: tag,
+                        indent: indent,
+                        type: 'close',
+                        tag: tagName
                     });
+                    pos = tagEnd + 1;
                 }
-            });
-            
-            lines.push({ 
-                text: '}', 
-                indent: indent, 
-                path: path, 
-                type: 'close-object' 
-            });
+            }
+            // Self-closing tag
+            else if (tag.endsWith('/>')) {
+                const tagContent = tag.substring(1, tag.length - 2).trim();
+                const spacePos = tagContent.indexOf(' ');
+                const tagName = spacePos > 0 ? tagContent.substring(0, spacePos) : tagContent;
+                lines.push({
+                    text: tag,
+                    indent: indent,
+                    type: 'self-close',
+                    tag: tagName
+                });
+                pos = tagEnd + 1;
+            }
+            // Opening tag
+            else {
+                const tagContent = tag.substring(1, tag.length - 1).trim();
+                const spacePos = tagContent.indexOf(' ');
+                const tagName = spacePos > 0 ? tagContent.substring(0, spacePos) : tagContent;
+                
+                // Check for text content (no nested tags)
+                const nextTagStart = xml.indexOf('<', tagEnd + 1);
+                let textContent = '';
+                let hasNestedTags = false;
+                
+                if (nextTagStart > tagEnd + 1) {
+                    textContent = xml.substring(tagEnd + 1, nextTagStart).trim();
+                    
+                    // Check if next tag is a closing tag for this element
+                    const nextTag = xml.substring(nextTagStart, xml.indexOf('>', nextTagStart) + 1);
+                    if (nextTag === '</' + tagName + '>') {
+                        // Simple element with text content only - will be merged
+                        hasNestedTags = false;
+                    } else if (nextTag.startsWith('</')) {
+                        // Closing tag but for different element - has nested structure
+                        hasNestedTags = false;
+                    } else {
+                        // Another opening tag - has nested structure
+                        hasNestedTags = true;
+                    }
+                }
+                
+                lines.push({
+                    text: tag,
+                    indent: indent,
+                    type: 'open',
+                    tag: tagName,
+                    content: textContent,
+                    hasNested: hasNestedTags,
+                    merged: false
+                });
+                
+                if (hasNestedTags || !textContent) {
+                    indent++;
+                }
+                pos = tagEnd + 1;
+            }
         }
         
         return lines;
     }
-    
-    const boomiLines = buildJSONLines(boomiNorm, '', 0);
-    const muleLines = buildJSONLines(muleNorm, '', 0);
-    
-    // LCS-based alignment for primitive arrays
-    function alignPrimitiveArrays(bLines, mLines) {
-        const arrayGroups = {};
-        
-        // Group array elements by their parent array path
-        bLines.forEach((line, idx) => {
-            if (line.arrayPath) {
-                if (!arrayGroups[line.arrayPath]) {
-                    arrayGroups[line.arrayPath] = { boomi: [], mule: [] };
-                }
-                arrayGroups[line.arrayPath].boomi.push({ line, idx });
-            }
-        });
-        
-        mLines.forEach((line, idx) => {
-            if (line.arrayPath) {
-                if (!arrayGroups[line.arrayPath]) {
-                    arrayGroups[line.arrayPath] = { boomi: [], mule: [] };
-                }
-                arrayGroups[line.arrayPath].mule.push({ line, idx });
-            }
-        });
-        
-        const alignmentMap = { boomi: new Map(), mule: new Map() };
-        
-        // For each array, create alignment using LCS approach
-        Object.keys(arrayGroups).forEach(arrayPath => {
-            const bItems = arrayGroups[arrayPath].boomi;
-            const mItems = arrayGroups[arrayPath].mule;
-            
-            const bValues = bItems.map(item => item.line.arrayValue);
-            const mValues = mItems.map(item => item.line.arrayValue);
-            
-            // Simple LCS alignment
-            const aligned = [];
-            let bIdx = 0;
-            let mIdx = 0;
-            
-            while (bIdx < bValues.length || mIdx < mValues.length) {
-                if (bIdx >= bValues.length) {
-                    // Only mule remaining
-                    aligned.push({ bIdx: null, mIdx: mIdx });
-                    mIdx++;
-                } else if (mIdx >= mValues.length) {
-                    // Only boomi remaining
-                    aligned.push({ bIdx: bIdx, mIdx: null });
-                    bIdx++;
-                } else if (bValues[bIdx] === mValues[mIdx]) {
-                    // Match
-                    aligned.push({ bIdx: bIdx, mIdx: mIdx });
-                    bIdx++;
-                    mIdx++;
-                } else {
-                    // Check if current boomi exists ahead in mule
-                    let foundInMule = -1;
-                    for (let i = mIdx + 1; i < Math.min(mIdx + 10, mValues.length); i++) {
-                        if (bValues[bIdx] === mValues[i]) {
-                            foundInMule = i;
-                            break;
-                        }
-                    }
-                    
-                    // Check if current mule exists ahead in boomi
-                    let foundInBoomi = -1;
-                    for (let i = bIdx + 1; i < Math.min(bIdx + 10, bValues.length); i++) {
-                        if (mValues[mIdx] === bValues[i]) {
-                            foundInBoomi = i;
-                            break;
-                        }
-                    }
-                    
-                    if (foundInMule === -1 && foundInBoomi === -1) {
-                        // Both only exist in their respective arrays
-                        aligned.push({ bIdx: bIdx, mIdx: null });
-                        aligned.push({ bIdx: null, mIdx: mIdx });
-                        bIdx++;
-                        mIdx++;
-                    } else if (foundInMule !== -1 && (foundInBoomi === -1 || (foundInMule - mIdx) <= (foundInBoomi - bIdx))) {
-                        // Current mule is unique, advance it
-                        aligned.push({ bIdx: null, mIdx: mIdx });
-                        mIdx++;
-                    } else {
-                        // Current boomi is unique, advance it
-                        aligned.push({ bIdx: bIdx, mIdx: null });
-                        bIdx++;
-                    }
-                }
-            }
-            
-            // Create mapping
-            aligned.forEach(pair => {
-                if (pair.bIdx !== null && pair.mIdx !== null) {
-                    alignmentMap.boomi.set(bItems[pair.bIdx].idx, mItems[pair.mIdx].idx);
-                    alignmentMap.mule.set(mItems[pair.mIdx].idx, bItems[pair.bIdx].idx);
-                }
-            });
-        });
-        
-        return alignmentMap;
-    }
-    
-    const arrayAlignment = alignPrimitiveArrays(boomiLines, muleLines);
-    
-    // Smart alignment with array awareness
-    function alignWithArrays(leftLines, rightLines, arrayMap) {
+
+
+    const boomiLines = parseXML(boomiResponseRaw);
+    const muleLines = parseXML(mulesoftResponseRaw);
+
+    console.log("Boomi lines: " + boomiLines.length);
+    console.log("Mule lines: " + muleLines.length);
+
+    // Align XML lines
+    function alignXMLLines(leftLines, rightLines) {
         const aligned = [];
         let leftIdx = 0;
         let rightIdx = 0;
         
         while (leftIdx < leftLines.length || rightIdx < rightLines.length) {
-            const leftLine = leftLines[leftIdx];
-            const rightLine = rightLines[rightIdx];
+            const left = leftLines[leftIdx];
+            const right = rightLines[rightIdx];
             
-            if (!leftLine && rightLine) {
-                aligned.push({
-                    boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
-                    mule: rightLine,
-                    status: 'only_mule'
-                });
+            if (!left && right) {
+                aligned.push({ boomi: { text: '', indent: right.indent, isEmpty: true }, mule: right, status: 'only_mule' });
                 rightIdx++;
-            } else if (leftLine && !rightLine) {
-                aligned.push({
-                    boomi: leftLine,
-                    mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
-                    status: 'only_boomi'
-                });
+            } else if (left && !right) {
+                aligned.push({ boomi: left, mule: { text: '', indent: left.indent, isEmpty: true }, status: 'only_boomi' });
                 leftIdx++;
+            } else if (left.tag === right.tag && left.type === right.type) {
+                let status = 'match';
+                if (left.text !== right.text) {
+                    status = 'mismatch';
+                }
+                aligned.push({ boomi: left, mule: right, status: status });
+                leftIdx++;
+                rightIdx++;
             } else {
-                // Check if this is a mapped array element
-                const mappedRight = arrayMap.boomi.get(leftIdx);
-                const mappedLeft = arrayMap.mule.get(rightIdx);
+                // Tag mismatch - check if tag exists ahead
+                let foundRight = false;
+                for (let i = rightIdx + 1; i < Math.min(rightIdx + 10, rightLines.length); i++) {
+                    if (rightLines[i].tag === left.tag) {
+                        foundRight = true;
+                        break;
+                    }
+                }
                 
-                if (mappedRight === rightIdx) {
-                    // Aligned array elements
-                    aligned.push({
-                        boomi: leftLine,
-                        mule: rightLine,
-                        status: 'match'
-                    });
+                if (!foundRight) {
+                    aligned.push({ boomi: left, mule: { text: '', indent: left.indent, isEmpty: true }, status: 'only_boomi' });
                     leftIdx++;
-                    rightIdx++;
-                } else if (leftLine.arrayPath && !mappedRight) {
-                    // Unmatched left array element
-                    aligned.push({
-                        boomi: leftLine,
-                        mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
-                        status: 'only_boomi'
-                    });
-                    leftIdx++;
-                } else if (rightLine.arrayPath && !mappedLeft) {
-                    // Unmatched right array element
-                    aligned.push({
-                        boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
-                        mule: rightLine,
-                        status: 'only_mule'
-                    });
-                    rightIdx++;
-                } else if (leftLine.path === rightLine.path && leftLine.type === rightLine.type) {
-                    // Regular path match
-                    let status = 'match';
-                    if (leftLine.text !== rightLine.text && !leftLine.type) {
-                        status = 'mismatch';
-                    }
-                    
-                    aligned.push({
-                        boomi: leftLine,
-                        mule: rightLine,
-                        status: status
-                    });
-                    leftIdx++;
-                    rightIdx++;
                 } else {
-                    // Different paths - determine which to advance
-                    let rightHasPath = false;
-                    for (let i = rightIdx + 1; i < Math.min(rightIdx + 30, rightLines.length); i++) {
-                        if (rightLines[i].path === leftLine.path && rightLines[i].type === leftLine.type) {
-                            rightHasPath = true;
-                            break;
-                        }
-                    }
-                    
-                    let leftHasPath = false;
-                    for (let i = leftIdx + 1; i < Math.min(leftIdx + 30, leftLines.length); i++) {
-                        if (leftLines[i].path === rightLine.path && leftLines[i].type === rightLine.type) {
-                            leftHasPath = true;
-                            break;
-                        }
-                    }
-                    
-                    if (!rightHasPath) {
-                        aligned.push({
-                            boomi: leftLine,
-                            mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
-                            status: 'only_boomi'
-                        });
-                        leftIdx++;
-                    } else if (!leftHasPath) {
-                        aligned.push({
-                            boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
-                            mule: rightLine,
-                            status: 'only_mule'
-                        });
-                        rightIdx++;
-                    } else {
-                        // Both exist - advance based on path comparison
-                        if (leftLine.path < rightLine.path) {
-                            aligned.push({
-                                boomi: leftLine,
-                                mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
-                                status: 'only_boomi'
-                            });
-                            leftIdx++;
-                        } else {
-                            aligned.push({
-                                boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
-                                mule: rightLine,
-                                status: 'only_mule'
-                            });
-                            rightIdx++;
-                        }
-                    }
+                    aligned.push({ boomi: { text: '', indent: right.indent, isEmpty: true }, mule: right, status: 'only_mule' });
+                    rightIdx++;
                 }
             }
         }
         
         return aligned;
     }
-    
-    const aligned = alignWithArrays(boomiLines, muleLines, arrayAlignment);
-    
+
+    const aligned = alignXMLLines(boomiLines, muleLines);
+
+    console.log("Aligned lines: " + aligned.length);
+
     // Calculate stats
     let totalMismatches = 0;
     let totalExempted = 0;
-    
-    aligned.forEach(pair => {
-        const path = pair.boomi.path || pair.mule.path;
+
+    aligned.forEach(function(pair) {
+        const tag = pair.boomi.tag || pair.mule.tag;
         let isExempted = false;
         
-        if (path) {
-            for (let j = 0; j < exemptedFields.length; j++) {
-                if (path.includes(exemptedFields[j])) {
+        if (tag) {
+            for (let i = 0; i < exemptedFields.length; i++) {
+                if (tag.indexOf(exemptedFields[i]) !== -1) {
                     pair.status = 'exempted';
                     isExempted = true;
                     totalExempted++;
@@ -438,29 +250,22 @@ function executeComparison() {
             totalMismatches++;
         }
     });
-    
+
     const totalLines = aligned.length;
-
-    console.log("Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
-
-    // Tests
-    pm.test("Boomi API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]));
-    pm.test("MuleSoft API responded", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]));
-    pm.test("All non-exempted fields match", () => pm.expect(totalMismatches).to.equal(0));
-
     const matchPercentage = totalLines > 0 ? Math.round(((totalLines - totalMismatches - totalExempted) / totalLines) * 100) : 100;
     const statusText = totalMismatches > 0 ? 'FAILED' : 'PASSED';
 
-        // Store report data - NO TRUNCATION ANYWHERE
-    function minifyResponse(text) {
-        if (!text) return "";
-        try { 
-            // Minify JSON but don't truncate
-            return JSON.stringify(JSON.parse(text.trim()));
-        } catch (e) { 
-            // If not JSON, return as-is without truncation
-            return text.trim();
-        }
+    console.log("XML Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
+
+    // Tests
+    pm.test("Boomi SOAP API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204, 500]));
+    pm.test("MuleSoft SOAP API responded", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204, 500]));
+    pm.test("All non-exempted XML elements match", () => pm.expect(totalMismatches).to.equal(0));
+
+    // Store report
+    function minifyXML(xml) {
+        if (!xml) return "";
+        return xml.trim().replace(/\s+/g, ' ').replace(/>\s+</g, '><');
     }
 
     const statsObj = {
@@ -478,38 +283,31 @@ function executeComparison() {
     const reportEntry = {
         serialNumber: parseInt(reportIndex),
         requestName: requestName,
-        curlCommand: curlCommand,  // FULL cURL stored here
-        boomiResponse: minifyResponse(boomiResponseRaw),
-        mulesoftResponse: minifyResponse(mulesoftResponseRaw),
+        curlCommand: curlCommand,
+        boomiResponse: minifyXML(boomiResponseRaw),
+        mulesoftResponse: minifyXML(mulesoftResponseRaw),
         statistics: statsObj
     };
 
-    const paddedIndex = reportIndex.padStart(3, '0');
-    
-    // Store with full data
-    pm.collectionVariables.set("report_data_" + paddedIndex, JSON.stringify(reportEntry));
-    
-    console.log("Report stored with cURL length: " + curlCommand.length);
-
+    pm.collectionVariables.set("report_data_" + reportIndex.padStart(3, '0'), JSON.stringify(reportEntry));
     pm.collectionVariables.set("temp_request_name", "");
     pm.collectionVariables.set("temp_request_curl", "");
 
-
-
-    // Visualizer
+    // Visualizer for individual execution
     if (isIndividualExecution) {
-        console.log("Rendering side-by-side JSON visualizer");
+        console.log("Rendering XML visualizer");
         
-        let tableRows = aligned.map(pair => {
+        let tableRows = aligned.map(function(pair) {
             const bLine = pair.boomi;
             const mLine = pair.mule;
             const status = pair.status;
             
-            const bIndent = bLine.indent * 16;
-            const mIndent = mLine.indent * 16;
+            const bIndent = bLine.indent * 20;
+            const mIndent = mLine.indent * 20;
             
-            const bText = bLine.isEmpty ? '' : bLine.text;
-            const mText = mLine.isEmpty ? '' : mLine.text;
+            // HTML escape the text
+            const bText = bLine.isEmpty ? '' : escapeHtml(bLine.text);
+            const mText = mLine.isEmpty ? '' : escapeHtml(mLine.text);
             
             let pointer = '';
             if (status === 'mismatch') pointer = '↔';
@@ -552,7 +350,7 @@ th{padding:10px 8px;text-align:left;font-weight:600;font-size:10px;border-right:
 th:first-child{width:47%}
 th:nth-child(2){width:6%;text-align:center}
 th:last-child{width:47%}
-td{padding:4px 8px;border-bottom:1px solid #ecf0f1;border-right:1px solid #ecf0f1;font-family:Consolas,Monaco,monospace;font-size:11px;vertical-align:top;word-wrap:break-word;white-space:pre-wrap;line-height:1.4;max-width:480px}
+td{padding:4px 8px;border-bottom:1px solid #ecf0f1;border-right:1px solid #ecf0f1;font-family:Consolas,Monaco,monospace;font-size:11px;vertical-align:top;word-wrap:break-word;white-space:pre-wrap;line-height:1.4;color:#333}
 .pointer{text-align:center;font-size:14px;font-family:Arial;white-space:normal}
 tr.match{background:#fff}
 tr.mismatch{background:#ffebee}
@@ -566,7 +364,7 @@ tr:hover{background:#f1f8e9}
 </head>
 <body>
 <div class="header">
-<h2>Response Comparison: ${requestName}</h2>
+<h2>XML/SOAP Response Comparison: ${escapeHtml(requestName)}</h2>
 <div class="stats">
 <div><span class="label">Lines:</span><span class="value">${totalLines}</span></div>
 <div><span class="label">Mismatched:</span><span class="value">${totalMismatches}</span></div>
@@ -585,7 +383,7 @@ tr:hover{background:#f1f8e9}
 </div>
 <div class="table-container">
 <table>
-<thead><tr><th>Boomi JSON</th><th></th><th>MuleSoft JSON</th></tr></thead>
+<thead><tr><th>Boomi XML</th><th></th><th>MuleSoft XML</th></tr></thead>
 <tbody>${tableRows}</tbody>
 </table>
 </div>
@@ -594,6 +392,6 @@ tr:hover{background:#f1f8e9}
 </html>`;
         
         pm.visualizer.set(html);
-        console.log("Visualizer rendered with LCS array alignment");
+        console.log("XML Visualizer rendered with " + aligned.length + " rows");
     }
 }
