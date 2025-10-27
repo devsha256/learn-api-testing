@@ -31,74 +31,70 @@ function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
     try {
         const fullUrl = requestUrl.toString();
         
-        // Parse muleBase to extract protocol, host, port, and base path
-        const muleBaseRegex = /^(https?:\/\/[^\/:]+(:\d+)?)(\/.*)?$/;
-        const muleBaseMatch = muleBase.match(muleBaseRegex);
+        // Parse URLs using native URL API
+        const muleBaseUrl = new URL(muleBase);
+        const boomiBaseUrl = new URL(boomiBase);
+        const fullUrlObj = new URL(fullUrl);
         
-        if (!muleBaseMatch) {
-            console.error("Invalid mule base URL format");
-            return null;
-        }
+        // Get origins (protocol + host + port)
+        const muleOrigin = muleBaseUrl.origin;
+        const boomiOrigin = boomiBaseUrl.origin;
         
-        const muleProtocolHost = muleBaseMatch[1]; // https://mule-base.com or https://mule-base.com:443
-        const muleBasePath = muleBaseMatch[3] || ''; // /test-app or empty
+        console.log("Mule origin: " + muleOrigin);
+        console.log("Boomi origin: " + boomiOrigin);
+        console.log("Full request path: " + fullUrlObj.pathname);
         
-        // Parse boomiBase
-        const boomiBaseRegex = /^(https?:\/\/[^\/:]+(:\d+)?)(\/.*)?$/;
-        const boomiBaseMatch = boomiBase.match(boomiBaseRegex);
+        // Get the path after the mule base
+        let requestPath = fullUrlObj.pathname;
         
-        if (!boomiBaseMatch) {
-            console.error("Invalid boomi base URL format");
-            return null;
-        }
-        
-        const boomiProtocolHost = boomiBaseMatch[1]; // https://boomi-base.com or https://boomi-base.com:443
-        const boomiBasePath = boomiBaseMatch[3] || ''; // usually empty
-        
-        // Remove mule protocol+host from full URL
-        let pathAfterHost = fullUrl;
-        if (fullUrl.startsWith(muleProtocolHost)) {
-            pathAfterHost = fullUrl.substring(muleProtocolHost.length);
-        } else {
-            console.error("URL doesn't start with mule base");
-            return null;
-        }
-        
-        // Remove mule base path if present
-        if (muleBasePath && pathAfterHost.startsWith(muleBasePath)) {
-            pathAfterHost = pathAfterHost.substring(muleBasePath.length);
+        // Remove mule base path if it exists (usually just "/")
+        const muleBasePath = muleBaseUrl.pathname;
+        if (muleBasePath !== '/' && requestPath.startsWith(muleBasePath)) {
+            requestPath = requestPath.substring(muleBasePath.length);
         }
         
         // Ensure path starts with /
-        if (!pathAfterHost.startsWith('/')) {
-            pathAfterHost = '/' + pathAfterHost;
+        if (!requestPath.startsWith('/')) {
+            requestPath = '/' + requestPath;
         }
         
-        // Split path and query string
-        const urlParts = pathAfterHost.split('?');
-        const pathPart = urlParts[0];
-        const queryPart = urlParts.length > 1 ? '?' + urlParts[1] : '';
+        // Split into segments
+        const pathSegments = requestPath.split('/').filter(s => s.length > 0);
+        console.log("Path segments: [" + pathSegments.join(', ') + "]");
         
-        // Split path into segments
-        const pathSegments = pathPart.split('/').filter(function(s) { return s.length > 0; });
-        
-        // Remove first segment if it's NOT 'ws' (the app name like 'test-app')
-        if (pathSegments.length > 0 && pathSegments[0] !== 'ws') {
-            pathSegments.shift();
+        // AUTOMATICALLY REMOVE APP NAME (first segment if it's not a standard API keyword)
+        if (pathSegments.length > 0) {
+            const firstSegment = pathSegments[0];
+            const standardApiKeywords = ['ws', 'api', 'rest', 'graphql', 'v1', 'v2', 'v3'];
+            
+            // If first segment is NOT a standard API keyword, it's likely an app name - remove it
+            if (!standardApiKeywords.includes(firstSegment.toLowerCase())) {
+                console.log("Auto-removing app name: " + firstSegment);
+                pathSegments.shift(); // Remove first segment
+            }
         }
         
-        // Reconstruct boomi URL
-        const transformedPath = pathSegments.join('/');
-        const boomiFullPath = boomiBasePath ? boomiBasePath + '/' + transformedPath : '/' + transformedPath;
+        // Reconstruct path
+        const finalPath = '/' + pathSegments.join('/');
+        console.log("Final path: " + finalPath);
         
-        return boomiProtocolHost + boomiFullPath + queryPart;
+        // Add boomi base path if it exists
+        const boomiBasePath = boomiBaseUrl.pathname;
+        const boomiFullPath = (boomiBasePath !== '/' && boomiBasePath) 
+            ? boomiBasePath + finalPath 
+            : finalPath;
+        
+        // Build final URL
+        const boomiUrl = boomiOrigin + boomiFullPath + fullUrlObj.search;
+        
+        console.log("Transformed URL: " + boomiUrl);
+        return boomiUrl;
         
     } catch (error) {
-        console.error("URL transformation failed:", error);
+        console.error("URL transformation error: " + error.message);
         return null;
     }
 }
-
 
 const boomiUrl = transformMuleUrlToBoomi(requestUrl, muleBaseUrl, boomiBaseUrl);
 
