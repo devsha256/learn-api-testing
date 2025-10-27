@@ -31,20 +31,33 @@ function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
     try {
         const fullUrl = requestUrl.toString();
         
-        // Extract protocol://host:port from both bases
+        // Extract protocol://host:port (handles with or without port)
         const muleOrigin = muleBase.match(/^https?:\/\/[^\/]+/)[0];
         const boomiOrigin = boomiBase.match(/^https?:\/\/[^\/]+/)[0];
         
-        // Remove mule origin and get path
-        let path = fullUrl.replace(muleOrigin, '');
+        console.log("Mule origin: " + muleOrigin);
+        console.log("Boomi origin: " + boomiOrigin);
+        console.log("Full URL: " + fullUrl);
         
-        // Remove first path segment (app name) if it's not 'ws' or 'api'
-        path = path.replace(/^\/([^\/]+)(\/|$)/, function(match, segment, slash) {
-            return (/^(ws|api|rest|v\d+|services)$/i.test(segment)) ? match : slash;
+        // Remove mule origin and get path + query
+        let pathAndQuery = fullUrl.substring(muleOrigin.length);
+        console.log("Path+Query: " + pathAndQuery);
+        
+        // Remove first path segment (app name) if it's not an API keyword
+        pathAndQuery = pathAndQuery.replace(/^\/([^\/\?]+)(\/|\?|$)/, function(match, segment, separator) {
+            const apiKeywords = /^(ws|api|rest|v\d+|services)$/i;
+            if (apiKeywords.test(segment)) {
+                console.log("Keeping: " + segment);
+                return match;
+            } else {
+                console.log("Removing: " + segment);
+                return separator;
+            }
         });
         
-        // Return boomi URL
-        return boomiOrigin + path;
+        console.log("Final path: " + pathAndQuery);
+        
+        return boomiOrigin + pathAndQuery;
         
     } catch (error) {
         console.error("Transform failed: " + error.message);
