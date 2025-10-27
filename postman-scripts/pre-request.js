@@ -30,68 +30,112 @@ const requestUrl = pm.request.url;
 function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
     try {
         const fullUrl = requestUrl.toString();
+        console.log("=== URL Transformation Debug ===");
+        console.log("Full URL: " + fullUrl);
+        console.log("Mule Base: " + muleBase);
+        console.log("Boomi Base: " + boomiBase);
         
-        // Parse URLs using native URL API
-        const muleBaseUrl = new URL(muleBase);
-        const boomiBaseUrl = new URL(boomiBase);
-        const fullUrlObj = new URL(fullUrl);
+        // Validate inputs
+        if (!muleBase || !boomiBase) {
+            console.error("Missing base URLs");
+            return null;
+        }
         
-        // Get origins (protocol + host + port)
+        // Try to parse URLs
+        let muleBaseUrl, boomiBaseUrl, fullUrlObj;
+        
+        try {
+            muleBaseUrl = new URL(muleBase);
+        } catch (e) {
+            console.error("Invalid mule base URL: " + e.message);
+            return null;
+        }
+        
+        try {
+            boomiBaseUrl = new URL(boomiBase);
+        } catch (e) {
+            console.error("Invalid boomi base URL: " + e.message);
+            return null;
+        }
+        
+        try {
+            fullUrlObj = new URL(fullUrl);
+        } catch (e) {
+            console.error("Invalid full URL: " + e.message);
+            return null;
+        }
+        
+        // Get origins
         const muleOrigin = muleBaseUrl.origin;
         const boomiOrigin = boomiBaseUrl.origin;
         
         console.log("Mule origin: " + muleOrigin);
         console.log("Boomi origin: " + boomiOrigin);
-        console.log("Full request path: " + fullUrlObj.pathname);
         
-        // Get the path after the mule base
+        // Get the full path
         let requestPath = fullUrlObj.pathname;
+        console.log("Request pathname: " + requestPath);
         
-        // Remove mule base path if it exists (usually just "/")
+        // Remove mule base path if present
         const muleBasePath = muleBaseUrl.pathname;
-        if (muleBasePath !== '/' && requestPath.startsWith(muleBasePath)) {
+        console.log("Mule base pathname: " + muleBasePath);
+        
+        if (muleBasePath && muleBasePath !== '/' && requestPath.startsWith(muleBasePath)) {
             requestPath = requestPath.substring(muleBasePath.length);
+            console.log("After removing mule base path: " + requestPath);
         }
         
-        // Ensure path starts with /
+        // Ensure starts with /
         if (!requestPath.startsWith('/')) {
             requestPath = '/' + requestPath;
         }
         
         // Split into segments
-        const pathSegments = requestPath.split('/').filter(s => s.length > 0);
+        const pathSegments = requestPath.split('/').filter(function(s) { 
+            return s.length > 0; 
+        });
+        
         console.log("Path segments: [" + pathSegments.join(', ') + "]");
         
-        // AUTOMATICALLY REMOVE APP NAME (first segment if it's not a standard API keyword)
+        // Remove app name if present (first segment that's not an API keyword)
         if (pathSegments.length > 0) {
             const firstSegment = pathSegments[0];
-            const standardApiKeywords = ['ws', 'api', 'rest', 'graphql', 'v1', 'v2', 'v3'];
+            const apiKeywords = ['ws', 'api', 'rest', 'graphql', 'v1', 'v2', 'v3', 'services'];
             
-            // If first segment is NOT a standard API keyword, it's likely an app name - remove it
-            if (!standardApiKeywords.includes(firstSegment.toLowerCase())) {
-                console.log("Auto-removing app name: " + firstSegment);
-                pathSegments.shift(); // Remove first segment
+            if (apiKeywords.indexOf(firstSegment.toLowerCase()) === -1) {
+                console.log("Removing app name: " + firstSegment);
+                pathSegments.shift();
+            } else {
+                console.log("First segment is API keyword, keeping it: " + firstSegment);
             }
         }
         
-        // Reconstruct path
-        const finalPath = '/' + pathSegments.join('/');
+        // Rebuild path
+        const finalPath = pathSegments.length > 0 ? '/' + pathSegments.join('/') : '/';
         console.log("Final path: " + finalPath);
         
-        // Add boomi base path if it exists
+        // Add boomi base path
         const boomiBasePath = boomiBaseUrl.pathname;
-        const boomiFullPath = (boomiBasePath !== '/' && boomiBasePath) 
-            ? boomiBasePath + finalPath 
-            : finalPath;
+        let boomiFullPath = finalPath;
+        
+        if (boomiBasePath && boomiBasePath !== '/') {
+            boomiFullPath = boomiBasePath + finalPath;
+        }
+        
+        console.log("Boomi full path: " + boomiFullPath);
         
         // Build final URL
-        const boomiUrl = boomiOrigin + boomiFullPath + fullUrlObj.search;
+        const queryString = fullUrlObj.search || '';
+        const boomiUrl = boomiOrigin + boomiFullPath + queryString;
         
-        console.log("Transformed URL: " + boomiUrl);
+        console.log("Result: " + boomiUrl);
+        console.log("=== End Debug ===");
+        
         return boomiUrl;
         
     } catch (error) {
-        console.error("URL transformation error: " + error.message);
+        console.error("URL transformation exception: " + error.message);
+        console.error("Stack: " + error.stack);
         return null;
     }
 }
