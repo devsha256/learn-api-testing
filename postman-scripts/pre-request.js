@@ -28,38 +28,17 @@ const method = currentRequest.method;
 const requestUrl = pm.request.url;
 
 function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
-    try {
-        const fullUrl = requestUrl.toString();
-        
-        // Extract just the hostname from mule base (no port)
-        const muleHost = muleBase.match(/^https?:\/\/([^\/]+)/)[1];
-        
-        // Build pattern to match mule base with optional port
-        const pattern = new RegExp('^(https?:\/\/' + muleHost.replace(/\./g, '\\.') + '(?::\\d+)?)');
-        const match = fullUrl.match(pattern);
-        
-        if (!match) {
-            console.error("URL doesn't match mule base");
-            return null;
-        }
-        
-        // Get the mule origin (with or without port from actual URL)
-        const muleOrigin = match[1];
-        
-        // Get boomi origin
-        const boomiOrigin = boomiBase.match(/^https?:\/\/[^\/]+/)[0];
-        
-        // Remove mule origin and service name
-        let path = fullUrl.substring(muleOrigin.length);
-        path = path.replace(/^\/[^\/]+\/ws\/rest\//, '/ws/rest/');
-        
-        return boomiOrigin + path;
-        
-    } catch (error) {
-        console.error("Transform failed: " + error.message);
-        return null;
-    }
+    const fullUrl = requestUrl.toString();
+    
+    // Simply replace mule base with boomi base, then remove service name
+    let result = fullUrl.replace(muleBase, boomiBase);
+    
+    // Remove service name pattern: /service-name/ws/rest/ -> /ws/rest/
+    result = result.replace(/\/[^\/]+\/ws\/rest\//, '/ws/rest/');
+    
+    return result;
 }
+
 
 const boomiUrl = transformMuleUrlToBoomi(requestUrl, muleBaseUrl, boomiBaseUrl);
 
