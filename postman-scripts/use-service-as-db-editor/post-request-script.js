@@ -1,82 +1,174 @@
-// Post-Response Script (Tests Tab)
-const responseData = pm.response.json();
+// ========================================
+// DATA EXTRACTION
+// ========================================
+
+/**
+ * Safely extracts data from response
+ * @param {Object} response - Postman response object
+ * @returns {Object} - Parsed response data
+ */
+const extractResponseData = (response) => {
+    try {
+        return response.json();
+    } catch (error) {
+        console.error('Error parsing response:', error);
+        return { results: [] };
+    }
+};
+
+/**
+ * Gets variable from Postman with fallback
+ * @param {string} key - Variable key
+ * @param {*} defaultValue - Default value
+ * @returns {*} - Variable value or default
+ */
+const getVariable = (key, defaultValue = null) => {
+    try {
+        const value = pm.variables.get(key);
+        return value ? JSON.parse(value) : defaultValue;
+    } catch (error) {
+        console.error(`Error getting variable ${key}:`, error);
+        return defaultValue;
+    }
+};
+
+// ========================================
+// FIELD MAPPING
+// ========================================
+
+/**
+ * Converts field name to lowercase for response mapping
+ * @param {string} field - Field name (e.g., "Logs.Status")
+ * @returns {string} - Lowercase field (e.g., "logs.status")
+ */
+const toLowercaseKey = (field) => field.toLowerCase();
+
+/**
+ * Creates field mapping object
+ * @param {Array<string>} fields - Array of field names
+ * @returns {Object} - Mapping object {displayField: responseKey}
+ */
+const createFieldMapping = (fields) => 
+    fields.reduce((mapping, field) => ({
+        ...mapping,
+        [field]: toLowercaseKey(field)
+    }), {});
+
+/**
+ * Transforms single entry from response format to display format
+ * @param {Object} entry - Response entry with lowercase keys
+ * @param {Array<string>} fields - Display field names
+ * @param {Object} fieldMapping - Field mapping object
+ * @returns {Object} - Transformed entry with display keys
+ */
+const transformEntry = (entry, fields, fieldMapping) =>
+    fields.reduce((transformed, field) => ({
+        ...transformed,
+        [field]: entry[fieldMapping[field]] ?? null
+    }), {});
+
+/**
+ * Transforms all response data
+ * @param {Array<Object>} entries - Response entries
+ * @param {Array<string>} fields - Display field names
+ * @param {Object} fieldMapping - Field mapping object
+ * @returns {Array<Object>} - Transformed entries
+ */
+const transformData = (entries, fields, fieldMapping) =>
+    entries.map(entry => transformEntry(entry, fields, fieldMapping));
+
+// ========================================
+// FILTER UTILITIES
+// ========================================
+
+/**
+ * Counts active filters
+ * @param {Object} filters - Filters object
+ * @returns {number} - Count of active filters
+ */
+const countActiveFilters = (filters) =>
+    Object.values(filters).filter(value => value && value !== '').length;
+
+// ========================================
+// DEBUG LOGGING
+// ========================================
+
+/**
+ * Logs transformation debug information
+ * @param {Object} data - Debug data object
+ */
+const logTransformDebug = ({ fieldMapping, sampleData, totalRecords, activeFilters }) => {
+    console.log('═══════════════════════════════════════');
+    console.log('POST-RESPONSE SCRIPT EXECUTION');
+    console.log('═══════════════════════════════════════');
+    console.log('Field mapping:', fieldMapping);
+    console.log('Total records:', totalRecords);
+    console.log('Active filters count:', activeFilters);
+    console.log('Sample transformed data:', sampleData);
+    console.log('═══════════════════════════════════════');
+};
+
+// ========================================
+// MAIN EXECUTION
+// ========================================
+
+// Extract data
+const responseData = extractResponseData(pm.response);
 const logEntries = responseData.results || [];
-const dbFields = JSON.parse(pm.variables.get('db_fields') || '[]');
-const currentFilters = JSON.parse(pm.variables.get('current_filters') || '{}');
+const dbFields = getVariable('db_fields', []);
+const currentFilters = getVariable('current_filters', {});
 
-// ========================================
-// MAP FIELDS TO LOWERCASE RESPONSE KEYS
-// ========================================
-// Create mapping from dbFields (Table.Field) to response keys (lowercase)
-const fieldMapping = {};
-const displayFields = []; // Fields for display (with table identifiers)
-const responseKeys = []; // Lowercase keys for data access
+// Create field mapping and transform data
+const fieldMapping = createFieldMapping(dbFields);
+const transformedData = transformData(logEntries, dbFields, fieldMapping);
 
-dbFields.forEach(field => {
-    // Convert field name to lowercase for response mapping
-    // E.g., "Logs.Status" -> "logs.status"
-    const lowercaseKey = field.toLowerCase();
-    fieldMapping[field] = lowercaseKey;
-    displayFields.push(field);
-    responseKeys.push(lowercaseKey);
+// Calculate statistics
+const activeFiltersCount = countActiveFilters(currentFilters);
+const timestamp = new Date().toLocaleString('en-US', { 
+    year: 'numeric', 
+    month: 'short', 
+    day: 'numeric', 
+    hour: '2-digit', 
+    minute: '2-digit',
+    hour12: true
 });
 
-// Transform response data to use display field names
-const transformedData = logEntries.map(entry => {
-    const transformedEntry = {};
-    dbFields.forEach(field => {
-        const lowercaseKey = fieldMapping[field];
-        // Map lowercase response key to display field name
-        transformedEntry[field] = entry[lowercaseKey] !== undefined ? entry[lowercaseKey] : null;
-    });
-    return transformedEntry;
+// Debug logging
+logTransformDebug({
+    fieldMapping,
+    sampleData: transformedData[0],
+    totalRecords: transformedData.length,
+    activeFilters: activeFiltersCount
 });
 
-// Calculate active filters count
-const activeFiltersCount = Object.keys(currentFilters).filter(key => 
-    currentFilters[key] && currentFilters[key] !== ''
-).length;
+// ========================================
+// VISUALIZER TEMPLATE
+// ========================================
 
-console.log('Field mapping:', fieldMapping);
-console.log('Transformed data sample:', transformedData[0]);
-
-// Material Design 3 Template with interactive filtering
 const template = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    
-    <!-- Roboto Font -->
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet">
-    
-    <!-- Material Icons -->
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     
     <style>
-        /* Material Design 3 Theme */
         :root {
             --md-sys-color-primary: #6750A4;
             --md-sys-color-on-primary: #FFFFFF;
             --md-sys-color-primary-container: #EADDFF;
             --md-sys-color-on-primary-container: #21005D;
             --md-sys-color-secondary: #625B71;
-            --md-sys-color-on-secondary: #FFFFFF;
             --md-sys-color-secondary-container: #E8DEF8;
             --md-sys-color-on-secondary-container: #1D192B;
-            --md-sys-color-tertiary: #7D5260;
             --md-sys-color-surface: #FEF7FF;
             --md-sys-color-surface-variant: #E7E0EC;
             --md-sys-color-on-surface: #1D1B20;
             --md-sys-color-on-surface-variant: #49454F;
             --md-sys-color-outline: #79747E;
             --md-sys-color-outline-variant: #CAC4D0;
-            --md-sys-color-error: #B3261E;
-            --md-sys-color-on-error: #FFFFFF;
-            --md-sys-color-success: #00695C;
-            
-            /* Elevation */
             --md-sys-elevation-1: 0px 1px 2px rgba(0, 0, 0, 0.3), 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
             --md-sys-elevation-2: 0px 1px 2px rgba(0, 0, 0, 0.3), 0px 2px 6px 2px rgba(0, 0, 0, 0.15);
             --md-sys-elevation-3: 0px 4px 8px 3px rgba(0, 0, 0, 0.15), 0px 1px 3px rgba(0, 0, 0, 0.3);
@@ -96,36 +188,6 @@ const template = `
             line-height: 1.5;
         }
 
-        /* Material Design 3 Typography */
-        .md-typescale-headline-small {
-            font-size: 24px;
-            font-weight: 400;
-            line-height: 32px;
-            letter-spacing: 0;
-        }
-
-        .md-typescale-title-medium {
-            font-size: 16px;
-            font-weight: 500;
-            line-height: 24px;
-            letter-spacing: 0.15px;
-        }
-
-        .md-typescale-body-medium {
-            font-size: 14px;
-            font-weight: 400;
-            line-height: 20px;
-            letter-spacing: 0.25px;
-        }
-
-        .md-typescale-label-large {
-            font-size: 14px;
-            font-weight: 500;
-            line-height: 20px;
-            letter-spacing: 0.1px;
-        }
-
-        /* App Bar */
         .app-bar {
             background-color: var(--md-sys-color-primary);
             color: var(--md-sys-color-on-primary);
@@ -145,7 +207,6 @@ const template = `
             gap: 12px;
         }
 
-        /* Stats Card */
         .stats-container {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -181,7 +242,6 @@ const template = `
             line-height: 40px;
         }
 
-        /* Filter Section */
         .filter-section {
             background: white;
             border-radius: 12px;
@@ -197,65 +257,30 @@ const template = `
             margin-bottom: 16px;
         }
 
-        .filter-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        /* Material Design 3 Text Field */
-        .md-text-field {
-            position: relative;
+        .filter-chips {
             display: flex;
-            flex-direction: column;
+            flex-wrap: wrap;
+            gap: 8px;
+            margin-bottom: 16px;
         }
 
-        .md-text-field input {
-            font-family: 'Roboto', sans-serif;
-            font-size: 16px;
-            padding: 16px 16px 8px 16px;
-            border: 1px solid var(--md-sys-color-outline);
-            border-radius: 4px;
-            background: transparent;
-            color: var(--md-sys-color-on-surface);
-            outline: none;
-            transition: all 0.2s;
+        .md-chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            background: var(--md-sys-color-secondary-container);
+            color: var(--md-sys-color-on-secondary-container);
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
         }
 
-        .md-text-field input:focus {
-            border-color: var(--md-sys-color-primary);
-            border-width: 2px;
-            padding: 16px 15px 8px 15px;
+        .field-name {
+            font-family: 'Courier New', monospace;
+            font-size: 13px;
         }
 
-        .md-text-field label {
-            position: absolute;
-            left: 16px;
-            top: 16px;
-            font-size: 16px;
-            color: var(--md-sys-color-on-surface-variant);
-            transition: all 0.2s;
-            pointer-events: none;
-            background: white;
-            padding: 0 4px;
-        }
-
-        .md-text-field input:focus + label,
-        .md-text-field input:not(:placeholder-shown) + label {
-            top: -8px;
-            font-size: 12px;
-            color: var(--md-sys-color-primary);
-        }
-
-        .md-text-field .helper-text {
-            font-size: 12px;
-            color: var(--md-sys-color-on-surface-variant);
-            margin-top: 4px;
-            margin-left: 16px;
-        }
-
-        /* Material Design 3 Buttons */
         .md-button {
             font-family: 'Roboto', sans-serif;
             font-size: 14px;
@@ -269,7 +294,6 @@ const template = `
             align-items: center;
             gap: 8px;
             transition: all 0.2s;
-            text-transform: none;
         }
 
         .md-button:active {
@@ -286,16 +310,6 @@ const template = `
             box-shadow: var(--md-sys-elevation-2);
         }
 
-        .md-button-outlined {
-            background: transparent;
-            color: var(--md-sys-color-primary);
-            border: 1px solid var(--md-sys-color-outline);
-        }
-
-        .md-button-outlined:hover {
-            background: rgba(103, 80, 164, 0.08);
-        }
-
         .md-button-text {
             background: transparent;
             color: var(--md-sys-color-primary);
@@ -305,13 +319,6 @@ const template = `
             background: rgba(103, 80, 164, 0.08);
         }
 
-        .button-group {
-            display: flex;
-            gap: 12px;
-            flex-wrap: wrap;
-        }
-
-        /* Data Table Container */
         .table-container {
             background: white;
             border-radius: 12px;
@@ -334,7 +341,6 @@ const template = `
             overflow-y: auto;
         }
 
-        /* Material Design 3 Data Table */
         .md-data-table {
             width: 100%;
             border-collapse: collapse;
@@ -374,11 +380,6 @@ const template = `
         .md-data-table th .material-icons {
             font-size: 18px;
             opacity: 0.6;
-            transition: opacity 0.2s;
-        }
-
-        .md-data-table th:hover .material-icons {
-            opacity: 1;
         }
 
         .md-data-table td {
@@ -387,60 +388,10 @@ const template = `
             color: var(--md-sys-color-on-surface);
         }
 
-        .md-data-table tbody tr {
-            transition: background-color 0.2s;
-        }
-
         .md-data-table tbody tr:hover {
             background-color: rgba(103, 80, 164, 0.04);
         }
 
-        .md-data-table tbody tr:last-child td {
-            border-bottom: none;
-        }
-
-        /* Chip for Active Filters */
-        .filter-chips {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-bottom: 16px;
-        }
-
-        .md-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            padding: 6px 16px;
-            background: var(--md-sys-color-secondary-container);
-            color: var(--md-sys-color-on-secondary-container);
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-
-        .md-chip:hover {
-            box-shadow: var(--md-sys-elevation-1);
-        }
-
-        .md-chip .material-icons {
-            font-size: 18px;
-            cursor: pointer;
-            opacity: 0.7;
-        }
-
-        .md-chip .material-icons:hover {
-            opacity: 1;
-        }
-
-        .field-name {
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-            color: var(--md-sys-color-on-secondary-container);
-        }
-
-        /* Empty State */
         .empty-state {
             text-align: center;
             padding: 60px 20px;
@@ -453,103 +404,20 @@ const template = `
             margin-bottom: 16px;
         }
 
-        /* Code Block */
-        .code-block {
-            background: #1E1E1E;
-            color: #D4D4D4;
-            padding: 16px;
-            border-radius: 8px;
-            font-family: 'Courier New', monospace;
-            font-size: 13px;
-            overflow-x: auto;
-            margin: 16px 0;
-            line-height: 1.6;
-        }
-
-        .code-block .keyword {
-            color: #569CD6;
-        }
-
-        .code-block .string {
-            color: #CE9178;
-        }
-
-        .code-block .comment {
-            color: #6A9955;
-            font-style: italic;
-        }
-
-        .code-block .property {
-            color: #9CDCFE;
-        }
-
-        /* Dialog/Modal */
-        .modal {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 1000;
-            align-items: center;
-            justify-content: center;
-        }
-
-        .modal.active {
-            display: flex;
-        }
-
-        .modal-content {
-            background: white;
-            border-radius: 28px;
-            padding: 24px;
-            max-width: 700px;
-            width: 90%;
-            max-height: 80vh;
-            overflow-y: auto;
-            box-shadow: var(--md-sys-elevation-3);
-        }
-
-        .modal-title {
-            font-size: 24px;
-            font-weight: 400;
-            margin-bottom: 16px;
-            color: var(--md-sys-color-on-surface);
-        }
-
-        .modal-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            margin-top: 24px;
-        }
-
-        /* Scrollbar Styling */
-        .table-wrapper::-webkit-scrollbar,
-        .modal-content::-webkit-scrollbar {
+        .table-wrapper::-webkit-scrollbar {
             width: 8px;
             height: 8px;
         }
 
-        .table-wrapper::-webkit-scrollbar-track,
-        .modal-content::-webkit-scrollbar-track {
+        .table-wrapper::-webkit-scrollbar-track {
             background: var(--md-sys-color-surface-variant);
         }
 
-        .table-wrapper::-webkit-scrollbar-thumb,
-        .modal-content::-webkit-scrollbar-thumb {
+        .table-wrapper::-webkit-scrollbar-thumb {
             background: var(--md-sys-color-outline);
             border-radius: 4px;
         }
 
-        .table-wrapper::-webkit-scrollbar-thumb:hover,
-        .modal-content::-webkit-scrollbar-thumb:hover {
-            background: var(--md-sys-color-on-surface-variant);
-        }
-
-        /* Info banner */
         .info-banner {
             background: var(--md-sys-color-primary-container);
             color: var(--md-sys-color-on-primary-container);
@@ -561,14 +429,9 @@ const template = `
             margin-bottom: 16px;
             font-size: 14px;
         }
-
-        .info-banner .material-icons {
-            font-size: 20px;
-        }
     </style>
 </head>
 <body>
-    <!-- App Bar -->
     <div class="app-bar">
         <div class="app-bar-title">
             <span class="material-icons">storage</span>
@@ -580,7 +443,6 @@ const template = `
         </div>
     </div>
 
-    <!-- Stats Cards -->
     <div class="stats-container">
         <div class="stat-card">
             <div class="stat-label">Total Records</div>
@@ -596,69 +458,37 @@ const template = `
         </div>
     </div>
 
-    <!-- Filter Section -->
     <div class="filter-section">
         <div class="filter-header">
-            <h2 class="md-typescale-headline-small">Query Filters</h2>
-            <button class="md-button md-button-text" onclick="toggleFilters()">
+            <h2>Query Filters</h2>
+            <button class="md-button md-button-text" onclick="AppState.toggleFilters()">
                 <span class="material-icons">tune</span>
-                <span id="filter-toggle-text">Show Filters</span>
+                <span id="filter-toggle-text">View Filters</span>
             </button>
         </div>
 
-        <!-- Info Banner -->
         <div class="info-banner">
             <span class="material-icons">info</span>
-            <span>Modify filters in the Pre-request Script using <strong>Table.Field</strong> format, then re-send the request.</span>
+            <span>Modify filters in Pre-request Script using <strong>Table.Field</strong> format</span>
         </div>
 
-        <!-- Active Filter Chips -->
         <div class="filter-chips" id="activeFilters"></div>
-
-        <!-- Filter Grid (Display Only) -->
-        <div class="filter-grid" id="filterGrid" style="display: none;">
-            {{#each fields}}
-            <div class="md-text-field">
-                <input type="text" id="filter_{{this}}" placeholder=" " value="{{lookup ../currentFilters this}}" readonly>
-                <label>{{this}}</label>
-                <div class="helper-text">Current filter value</div>
-            </div>
-            {{/each}}
-        </div>
-
-        <div class="button-group" id="filterButtons" style="display: none;">
-            <button class="md-button md-button-filled" onclick="showFilterInstructions()">
-                <span class="material-icons">code</span>
-                View Filter Code
-            </button>
-            <button class="md-button md-button-outlined" onclick="copyFilterTemplate()">
-                <span class="material-icons">content_copy</span>
-                Copy Filter Template
-            </button>
-            <button class="md-button md-button-text" onclick="exportToCSV()">
-                <span class="material-icons">download</span>
-                Export CSV
-            </button>
-        </div>
     </div>
 
-    <!-- Data Table -->
     <div class="table-container">
         <div class="table-header">
-            <div class="md-typescale-title-medium">Query Results</div>
-            <div class="button-group">
-                <button class="md-button md-button-text" onclick="exportToCSV()">
-                    <span class="material-icons">file_download</span>
-                    Export
-                </button>
-            </div>
+            <div>Query Results</div>
+            <button class="md-button md-button-filled" onclick="TableActions.exportToCSV()">
+                <span class="material-icons">file_download</span>
+                Export CSV
+            </button>
         </div>
         <div class="table-wrapper">
             <table class="md-data-table" id="dataTable">
                 <thead>
                     <tr>
                         {{#each fields}}
-                        <th onclick="sortTable('{{this}}')">
+                        <th onclick="TableActions.sortTable('{{this}}')">
                             <div class="header-content">
                                 <span>{{this}}</span>
                                 <span class="material-icons">unfold_more</span>
@@ -681,8 +511,8 @@ const template = `
                             <td colspan="{{fields.length}}">
                                 <div class="empty-state">
                                     <div class="material-icons">inbox</div>
-                                    <div class="md-typescale-headline-small">No Data Found</div>
-                                    <div class="md-typescale-body-medium">Adjust your filters in the Pre-request Script and try again</div>
+                                    <h3>No Data Found</h3>
+                                    <p>Adjust filters in Pre-request Script</p>
                                 </div>
                             </td>
                         </tr>
@@ -692,303 +522,249 @@ const template = `
         </div>
     </div>
 
-    <!-- Modal -->
-    <div class="modal" id="filterModal">
-        <div class="modal-content">
-            <h2 class="modal-title">Filter Configuration</h2>
-            <p class="md-typescale-body-medium" style="margin-bottom: 16px;">
-                To modify filters, update the <strong>filters</strong> object in your Pre-request Script using <strong>Table.Field</strong> format:
-            </p>
-            <div class="code-block" id="filterCode"></div>
-            <p class="md-typescale-body-medium" style="margin-top: 16px;">
-                <strong>Note:</strong> Field names use Table.Field format but are automatically mapped to lowercase response keys.
-            </p>
-            <div class="modal-actions">
-                <button class="md-button md-button-text" onclick="closeModal()">Close</button>
-                <button class="md-button md-button-filled" onclick="copyCodeToClipboard()">
-                    <span class="material-icons">content_copy</span>
-                    Copy Code
-                </button>
-            </div>
-        </div>
-    </div>
-
     <script>
-        // Data storage
-        let allData = {{{json data}}};
-        let fields = {{{json fields}}};
-        let currentFilters = {{{json currentFilters}}};
-        let sortState = {};
-        let filteredData = [...allData];
+        'use strict';
 
-        console.log('Loaded data:', allData.length, 'records');
-        console.log('Fields:', fields);
-        console.log('Active filters:', currentFilters);
+        // ========================================
+        // IMMUTABLE STATE MANAGEMENT
+        // ========================================
+        const AppState = (() => {
+            const state = {
+                allData: {{{json data}}},
+                fields: {{{json fields}}},
+                currentFilters: {{{json currentFilters}}},
+                sortState: {},
+                filteredData: [...{{{json data}}}]
+            };
 
-        // Initialize sort state
-        fields.forEach(field => {
-            sortState[field] = { direction: 'none' };
-        });
-
-        // Toggle filter section
-        function toggleFilters() {
-            const grid = document.getElementById('filterGrid');
-            const buttons = document.getElementById('filterButtons');
-            const toggleText = document.getElementById('filter-toggle-text');
-            
-            if (grid.style.display === 'none') {
-                grid.style.display = 'grid';
-                buttons.style.display = 'flex';
-                toggleText.textContent = 'Hide Filters';
-            } else {
-                grid.style.display = 'none';
-                buttons.style.display = 'none';
-                toggleText.textContent = 'Show Filters';
-            }
-        }
-
-        // Update active filter chips
-        function updateActiveFilterChips() {
-            const container = document.getElementById('activeFilters');
-            container.innerHTML = '';
-            
-            Object.keys(currentFilters).forEach(field => {
-                if (currentFilters[field] && currentFilters[field] !== '') {
-                    const chip = document.createElement('div');
-                    chip.className = 'md-chip';
-                    chip.innerHTML = \`
-                        <span class="field-name">\${field}</span>
-                        <span>=</span>
-                        <span>\${currentFilters[field]}</span>
-                    \`;
-                    container.appendChild(chip);
-                }
+            // Initialize sort state
+            state.fields.forEach(field => {
+                state.sortState[field] = { direction: 'none' };
             });
 
-            if (container.children.length === 0) {
-                container.innerHTML = '<div class="md-typescale-body-medium" style="color: var(--md-sys-color-on-surface-variant);">No active filters</div>';
-            }
-        }
-
-        // Show filter instructions modal
-        function showFilterInstructions() {
-            const modal = document.getElementById('filterModal');
-            const codeBlock = document.getElementById('filterCode');
+            const getState = () => ({ ...state });
             
-            // Generate filter code with syntax highlighting
-            let filterCode = '<span class="keyword">const</span> filters = {\\n';
-            fields.forEach(field => {
-                const value = currentFilters[field] || '';
-                if (value) {
-                    filterCode += \`  <span class="comment">// Active filter</span>\\n\`;
-                    filterCode += \`  <span class="property">'\${field}'</span>: <span class="string">'\${value}'</span>,\\n\`;
-                } else {
-                    filterCode += \`  <span class="comment">// '\${field}': '',</span>\\n\`;
-                }
-            });
-            filterCode += '};';
+            const updateState = (updates) => {
+                Object.assign(state, updates);
+                return getState();
+            };
+
+            const toggleFilters = () => {
+                const isVisible = document.getElementById('activeFilters').style.display !== 'none';
+                console.log('Toggle filters. Current:', isVisible ? 'visible' : 'hidden');
+                // Add toggle logic if needed
+            };
+
+            return { getState, updateState, toggleFilters };
+        })();
+
+        // ========================================
+        // PURE UTILITY FUNCTIONS
+        // ========================================
+        const Utils = {
+            isValidValue: (value) => value != null && value !== '',
             
-            codeBlock.innerHTML = filterCode;
-            modal.classList.add('active');
-        }
-
-        // Close modal
-        function closeModal() {
-            document.getElementById('filterModal').classList.remove('active');
-        }
-
-        // Copy filter template
-        function copyFilterTemplate() {
-            let template = 'const filters = {\\n';
-            fields.forEach(field => {
-                const value = currentFilters[field] || '';
-                if (value) {
-                    template += \`  '\${field}': '\${value}',\\n\`;
-                } else {
-                    template += \`  // '\${field}': '',\\n\`;
-                }
-            });
-            template += '};';
+            formatValue: (value) => value != null ? String(value) : '',
             
-            navigator.clipboard.writeText(template).then(() => {
-                alert('Filter template copied to clipboard!');
-            }).catch(err => {
-                console.error('Copy failed:', err);
-                prompt('Copy this code:', template);
-            });
-        }
-
-        // Copy code to clipboard
-        function copyCodeToClipboard() {
-            const codeBlock = document.getElementById('filterCode');
-            const text = codeBlock.textContent;
+            isNumeric: (value) => !isNaN(value) && value !== null && value !== '',
             
-            navigator.clipboard.writeText(text).then(() => {
-                alert('Code copied to clipboard!');
-                closeModal();
-            }).catch(err => {
-                console.error('Copy failed:', err);
-                prompt('Copy this code:', text);
-            });
-        }
-
-        // Sort table
-        function sortTable(field) {
-            const headers = document.querySelectorAll('th');
-            const fieldIndex = fields.indexOf(field);
+            isDate: (value) => !isNaN(Date.parse(value)),
             
-            // Toggle sort direction
-            if (sortState[field].direction === 'none' || sortState[field].direction === 'desc') {
-                sortState[field].direction = 'asc';
-            } else {
-                sortState[field].direction = 'desc';
-            }
-
-            // Reset other fields
-            fields.forEach(f => {
-                if (f !== field) sortState[f].direction = 'none';
-            });
-
-            // Sort the data
-            filteredData.sort((a, b) => {
-                let aVal = a[field];
-                let bVal = b[field];
-
-                // Handle null/undefined
-                if (aVal == null) return 1;
-                if (bVal == null) return -1;
-
-                // Numeric comparison
-                if (!isNaN(aVal) && !isNaN(bVal)) {
-                    return sortState[field].direction === 'asc' 
-                        ? parseFloat(aVal) - parseFloat(bVal)
-                        : parseFloat(bVal) - parseFloat(aVal);
-                }
-
-                // Date comparison (ISO format)
-                const aDate = new Date(aVal);
-                const bDate = new Date(bVal);
-                if (!isNaN(aDate) && !isNaN(bDate)) {
-                    return sortState[field].direction === 'asc'
-                        ? aDate - bDate
-                        : bDate - aDate;
-                }
-
-                // String comparison
-                aVal = String(aVal).toLowerCase();
-                bVal = String(bVal).toLowerCase();
+            compareValues: (a, b, isAscending) => {
+                const multiplier = isAscending ? 1 : -1;
                 
-                if (sortState[field].direction === 'asc') {
-                    return aVal.localeCompare(bVal);
-                } else {
-                    return bVal.localeCompare(aVal);
+                if (a == null) return 1;
+                if (b == null) return -1;
+                
+                // Numeric comparison
+                if (Utils.isNumeric(a) && Utils.isNumeric(b)) {
+                    return (parseFloat(a) - parseFloat(b)) * multiplier;
                 }
-            });
-
-            // Update header icons
-            headers.forEach((header, idx) => {
-                const icon = header.querySelector('.material-icons');
-                if (idx === fieldIndex) {
-                    icon.textContent = sortState[field].direction === 'asc' ? 'arrow_upward' : 'arrow_downward';
-                } else {
-                    icon.textContent = 'unfold_more';
+                
+                // Date comparison
+                if (Utils.isDate(a) && Utils.isDate(b)) {
+                    return (new Date(a) - new Date(b)) * multiplier;
                 }
-            });
-
-            // Re-render table
-            renderTable(filteredData);
-        }
-
-        // Render table
-        function renderTable(data) {
-            const tbody = document.getElementById('tableBody');
+                
+                // String comparison
+                return String(a).toLowerCase().localeCompare(String(b).toLowerCase()) * multiplier;
+            },
             
-            if (data.length === 0) {
-                tbody.innerHTML = \`
-                    <tr>
-                        <td colspan="\${fields.length}">
-                            <div class="empty-state">
-                                <div class="material-icons">inbox</div>
-                                <div class="md-typescale-headline-small">No Data Found</div>
-                                <div class="md-typescale-body-medium">Adjust your filters in the Pre-request Script and try again</div>
-                            </div>
-                        </td>
-                    </tr>
-                \`;
-                return;
+            escapeCSV: (value) => {
+                const str = Utils.formatValue(value);
+                const escaped = str.replace(/"/g, '""');
+                return str.includes(',') || str.includes('\\n') || str.includes('"') 
+                    ? \`"\${escaped}"\` 
+                    : str;
             }
+        };
 
-            tbody.innerHTML = '';
-            data.forEach(row => {
-                const tr = document.createElement('tr');
-                fields.forEach(field => {
-                    const td = document.createElement('td');
-                    const value = row[field];
-                    td.textContent = value != null ? value : '';
-                    tr.appendChild(td);
+        // ========================================
+        // UI RENDERING
+        // ========================================
+        const UIRenderer = {
+            renderFilterChips: (filters) => {
+                const container = document.getElementById('activeFilters');
+                const activeFilters = Object.entries(filters)
+                    .filter(([_, value]) => Utils.isValidValue(value));
+
+                if (activeFilters.length === 0) {
+                    container.innerHTML = '<div style="color: var(--md-sys-color-on-surface-variant);">No active filters</div>';
+                    return;
+                }
+
+                container.innerHTML = activeFilters
+                    .map(([field, value]) => \`
+                        <div class="md-chip">
+                            <span class="field-name">\${field}</span>
+                            <span>=</span>
+                            <span>\${value}</span>
+                        </div>
+                    \`)
+                    .join('');
+            },
+
+            renderTableBody: (data, fields) => {
+                const tbody = document.getElementById('tableBody');
+
+                if (data.length === 0) {
+                    tbody.innerHTML = \`
+                        <tr>
+                            <td colspan="\${fields.length}">
+                                <div class="empty-state">
+                                    <div class="material-icons">inbox</div>
+                                    <h3>No Data Found</h3>
+                                    <p>Adjust filters in Pre-request Script</p>
+                                </div>
+                            </td>
+                        </tr>
+                    \`;
+                    return;
+                }
+
+                tbody.innerHTML = data
+                    .map(row => \`
+                        <tr>
+                            \${fields.map(field => \`<td>\${Utils.formatValue(row[field])}</td>\`).join('')}
+                        </tr>
+                    \`)
+                    .join('');
+            },
+
+            updateSortIcons: (sortedField, direction, allFields) => {
+                const headers = document.querySelectorAll('th');
+                const fieldIndex = allFields.indexOf(sortedField);
+
+                headers.forEach((header, idx) => {
+                    const icon = header.querySelector('.material-icons');
+                    if (idx === fieldIndex) {
+                        icon.textContent = direction === 'asc' ? 'arrow_upward' : 'arrow_downward';
+                    } else {
+                        icon.textContent = 'unfold_more';
+                    }
                 });
-                tbody.appendChild(tr);
-            });
-        }
+            }
+        };
 
-        // Export to CSV
-        function exportToCSV() {
-            // Use field names as headers
-            let csv = fields.join(',') + '\\n';
+        // ========================================
+        // TABLE ACTIONS
+        // ========================================
+        const TableActions = {
+            sortTable: (field) => {
+                console.log('Sorting by field:', field);
+                
+                const state = AppState.getState();
+                const currentDirection = state.sortState[field].direction;
+                const newDirection = currentDirection === 'asc' ? 'desc' : 'asc';
+
+                // Update sort state
+                const newSortState = { ...state.sortState };
+                Object.keys(newSortState).forEach(f => {
+                    newSortState[f].direction = f === field ? newDirection : 'none';
+                });
+
+                // Sort data
+                const sortedData = [...state.filteredData].sort((a, b) => 
+                    Utils.compareValues(a[field], b[field], newDirection === 'asc')
+                );
+
+                // Update state and UI
+                AppState.updateState({ 
+                    sortState: newSortState, 
+                    filteredData: sortedData 
+                });
+
+                UIRenderer.updateSortIcons(field, newDirection, state.fields);
+                UIRenderer.renderTableBody(sortedData, state.fields);
+
+                console.log('Sort completed. Direction:', newDirection);
+            },
+
+            exportToCSV: () => {
+                console.log('Exporting to CSV...');
+                
+                const state = AppState.getState();
+                const { filteredData, fields } = state;
+
+                // Create CSV content
+                const header = fields.join(',');
+                const rows = filteredData
+                    .map(row => fields.map(field => Utils.escapeCSV(row[field])).join(','))
+                    .join('\\n');
+
+                const csv = \`\${header}\\n\${rows}\`;
+
+                // Create and trigger download
+                const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+                const url = URL.createObjectURL(blob);
+                const link = document.createElement('a');
+                const timestamp = new Date().getTime();
+                
+                link.href = url;
+                link.download = \`query_results_\${timestamp}.csv\`;
+                link.click();
+                
+                URL.revokeObjectURL(url);
+
+                console.log('CSV export completed. Rows:', filteredData.length);
+            }
+        };
+
+        // ========================================
+        // INITIALIZATION
+        // ========================================
+        const init = () => {
+            console.log('═══════════════════════════════════════');
+            console.log('VISUALIZER INITIALIZATION');
+            console.log('═══════════════════════════════════════');
             
-            filteredData.forEach(row => {
-                const values = fields.map(field => {
-                    let val = row[field] != null ? row[field] : '';
-                    val = String(val).replace(/"/g, '""');
-                    return val.includes(',') || val.includes('\\n') || val.includes('"') ? \`"\${val}"\` : val;
-                });
-                csv += values.join(',') + '\\n';
-            });
+            const state = AppState.getState();
+            
+            console.log('Loaded data records:', state.allData.length);
+            console.log('Fields:', state.fields);
+            console.log('Active filters:', state.currentFilters);
+            
+            UIRenderer.renderFilterChips(state.currentFilters);
+            
+            console.log('═══════════════════════════════════════');
+        };
 
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = \`query_results_\${new Date().getTime()}.csv\`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-        }
-
-        // Close modal when clicking outside
-        document.getElementById('filterModal').addEventListener('click', function(e) {
-            if (e.target === this) {
-                closeModal();
-            }
-        });
-
-        // Initialize
-        updateActiveFilterChips();
-        
-        // Show filters if there are active filters
-        if (Object.keys(currentFilters).some(key => currentFilters[key] && currentFilters[key] !== '')) {
-            toggleFilters();
-        }
+        // Execute initialization
+        init();
     </script>
 </body>
 </html>
 `;
 
-// Set visualizer with data
+// Set visualizer
 pm.visualizer.set(template, {
     data: transformedData,
-    fields: displayFields,
+    fields: dbFields,
     currentFilters: currentFilters,
     totalRecords: transformedData.length,
     displayedRecords: transformedData.length,
     activeFiltersCount: activeFiltersCount,
-    timestamp: new Date().toLocaleString('en-US', { 
-        year: 'numeric', 
-        month: 'short', 
-        day: 'numeric', 
-        hour: '2-digit', 
-        minute: '2-digit',
-        hour12: true
-    })
+    timestamp: timestamp
 });
+
+console.log('Visualizer template set successfully');

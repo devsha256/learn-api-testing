@@ -1,25 +1,17 @@
 // ========================================
-// DEFINE YOUR FILTERS HERE
+// FILTER CONFIGURATION
 // ========================================
 const filters = {
-    // Use table identifiers (case-sensitive, e.g., Table.Field)
-    // These will be mapped to lowercase in the response
-    
-    // Example filters:
+    // Define your filters here (Table.Field: value)
     // 'Logs.Status': 'active',
     // 'Logs.Level': 'error',
     // 'Users.UserId': '12345',
     // 'Logs.Timestamp': '>2025-10-01',
-    // 'Logs.IpAddress': '192.168.%',  // Use % for LIKE queries
-    // 'Logs.ResponseTime': '<1000',
-    // 'Sessions.SessionId': 'abc-123-xyz',
-    // 'Logs.Message': '%timeout%'
 };
 
 // ========================================
-// DEFINE YOUR DATABASE FIELDS HERE
+// DATABASE FIELDS CONFIGURATION
 // ========================================
-// Use proper case with table identifiers (e.g., Table.Field)
 const dbFields = [
     'Logs.Id',
     'Logs.Timestamp',
@@ -33,47 +25,106 @@ const dbFields = [
     'Logs.ErrorCode',
     'Logs.Method',
     'Logs.Endpoint'
-    // Add all your actual database fields with table identifiers
 ];
 
 // ========================================
-// BUILD WHERE CLAUSE (Don't modify below)
+// PURE FUNCTIONS FOR QUERY BUILDING
 // ========================================
-let filterParts = [];
 
-Object.keys(filters).forEach(field => {
-    let value = filters[field];
+/**
+ * Determines the SQL operator and formats value based on input
+ * @param {string} value - Filter value
+ * @returns {Object} - {operator, formattedValue}
+ */
+const getOperatorAndValue = (value) => {
+    const valueStr = value.toString().trim();
     
-    if (value && value !== '' && value !== null && value !== 'undefined') {
-        // Handle different data types and operators
-        if (value.toString().includes('%')) {
-            // LIKE operator for wildcard searches
-            filterParts.push(`${field} LIKE '${value}'`);
-        } else if (value.toString().startsWith('>') || value.toString().startsWith('<') || value.toString().startsWith('!')) {
-            // Comparison operators (>, <, !=)
-            if (value.toString().startsWith('!')) {
-                filterParts.push(`${field}!='${value.substring(1)}'`);
-            } else {
-                filterParts.push(`${field}${value}`);
-            }
-        } else if (!isNaN(value) && value.toString().trim() !== '') {
-            // Numeric comparison
-            filterParts.push(`${field}=${value}`);
-        } else {
-            // String equality
-            filterParts.push(`${field}='${value}'`);
-        }
+    // LIKE operator for wildcard
+    if (valueStr.includes('%')) {
+        return { operator: 'LIKE', formattedValue: `'${valueStr}'` };
     }
-});
+    
+    // NOT EQUAL operator
+    if (valueStr.startsWith('!')) {
+        return { operator: '!=', formattedValue: `'${valueStr.substring(1)}'` };
+    }
+    
+    // Comparison operators (>, <, >=, <=)
+    if (/^[><]=?/.test(valueStr)) {
+        const match = valueStr.match(/^([><]=?)(.+)/);
+        return { operator: match[1], formattedValue: match[2] };
+    }
+    
+    // Numeric value
+    if (!isNaN(valueStr) && valueStr !== '') {
+        return { operator: '=', formattedValue: valueStr };
+    }
+    
+    // Default string equality
+    return { operator: '=', formattedValue: `'${valueStr}'` };
+};
 
-// Set the WHERE condition for the URL
-let whereCondition = filterParts.length > 0 ? filterParts.join(' AND ') : '1=1';
+/**
+ * Creates a SQL condition string from field and value
+ * @param {string} field - Database field name
+ * @param {string} value - Filter value
+ * @returns {string} - SQL condition
+ */
+const createCondition = (field, value) => {
+    const { operator, formattedValue } = getOperatorAndValue(value);
+    return `${field} ${operator} ${formattedValue}`;
+};
+
+/**
+ * Checks if a filter value is valid
+ * @param {*} value - Value to check
+ * @returns {boolean}
+ */
+const isValidFilterValue = (value) => 
+    value !== null && 
+    value !== undefined && 
+    value !== '' && 
+    value !== 'undefined';
+
+/**
+ * Builds WHERE clause from filters object
+ * @param {Object} filters - Filters object
+ * @returns {string} - SQL WHERE clause
+ */
+const buildWhereClause = (filters) => {
+    const conditions = Object.entries(filters)
+        .filter(([_, value]) => isValidFilterValue(value))
+        .map(([field, value]) => createCondition(field, value));
+    
+    return conditions.length > 0 ? conditions.join(' AND ') : '1=1';
+};
+
+/**
+ * Logs debug information
+ * @param {string} whereClause - Generated WHERE clause
+ * @param {Object} filters - Active filters
+ */
+const logDebugInfo = (whereClause, filters) => {
+    console.log('═══════════════════════════════════════');
+    console.log('PRE-REQUEST SCRIPT EXECUTION');
+    console.log('═══════════════════════════════════════');
+    console.log('Generated WHERE clause:', whereClause);
+    console.log('Active filters:', JSON.stringify(filters, null, 2));
+    console.log('Database fields:', dbFields);
+    console.log('═══════════════════════════════════════');
+};
+
+// ========================================
+// EXECUTION
+// ========================================
+
+// Build WHERE clause using functional composition
+const whereCondition = buildWhereClause(filters);
+
+// Set Postman variables
 pm.variables.set('where_condition', whereCondition);
-
-// Pass data to post-response script
 pm.variables.set('db_fields', JSON.stringify(dbFields));
 pm.variables.set('current_filters', JSON.stringify(filters));
 
-console.log('Generated WHERE clause:', whereCondition);
-console.log('Active filters:', JSON.stringify(filters, null, 2));
-console.log('Database fields:', dbFields);
+// Log debug information
+logDebugInfo(whereCondition, filters);
