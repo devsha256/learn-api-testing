@@ -5,28 +5,101 @@ const PORT = 8000;
 // Middleware to parse JSON bodies in POST requests
 app.use(express.json());
 
-// --- EXISTING ENDPOINTS ---
+const user1 = {
+    "login": "devsha256",
+    "id": 136232364,
+    "node_id": "U_kgDOCB69rA",
+    "isActive": true,
+    "avatar_url": "https://avatars.githubusercontent.com/u/136232364?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/devsha256",
+    "html_url": "https://github.com/devsha256",
+    "followers_url": "https://api.github.com/users/devsha256/followers",
+    "following_url": "https://api.github.com/users/devsha256/following{/other_user}",
+    "gists_url": "https://api.github.com/users/devsha256/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/devsha256/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/devsha256/subscriptions",
+    "organizations_url": "https://api.github.com/users/devsha256/orgs",
+    "repos_url": "https://api.github.com/users/devsha256/repos",
+    "events_url": "https://api.github.com/users/devsha256/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/devsha256/received_events",
+    "type": "Admin",
+    "user_view_type": "public",
+    "site_admin": false,
+    "name": "saddam hossain",
+    "company": null,
+    "blog": "https://devsha256.github.io",
+    "location": "Kolkata, India",
+    "email": null,
+    "hireable": null,
+    "bio": "I am Mulesoft Certified Developer (Level 1 & 2) \r\nMulesoft Certified Platform Architect.\r\nI work <TBD>\r\nI Use: DataWeave, Javascript, Java & Python",
+    "twitter_username": null,
+    "public_repos": 8,
+    "public_gists": 0,
+    "followers": 0,
+    "following": 2,
+    "created_at": "2023-06-11T09:23:40Z",
+    "updated_at": "2025-10-21T08:39:14Z"
+}
+
+const user2 = {
+    "login": "devsha256",
+    "id": 136232364,
+    "node_id": "U_kgDOCB69rA",
+    "avatar_url": "https://avatars.githubusercontent.com/u/136232364?v=4",
+    "gravatar_id": "",
+    "url": "https://api.github.com/users/devsha256",
+    "html_url": "https://github.com/devsha256",
+    "followers_url": "https://api.github.com/users/devsha256/followers",
+    "following_url": "https://api.github.com/users/devsha256/following{/other_user}",
+    "gists_url": "https://api.github.com/users/devsha256/gists{/gist_id}",
+    "starred_url": "https://api.github.com/users/devsha256/starred{/owner}{/repo}",
+    "subscriptions_url": "https://api.github.com/users/devsha256/subscriptions",
+    "organizations_url": "https://api.github.com/users/devsha256/orgs",
+    "repos_url": "https://api.github.com/users/devsha256/repos",
+    "events_url": "https://api.github.com/users/devsha256/events{/privacy}",
+    "received_events_url": "https://api.github.com/users/devsha256/received_events",
+    "type": "User",
+    "user_view_type": "public",
+    "site_admin": false,
+    "name": "saddam hossain",
+    "company": null,
+    "blog": "https://devsha256.github.io",
+    "location": "Kolkata, India",
+    "email": "test@gmail.com",
+    "hireable": null,
+    "bio": "I am Mulesoft Certified Developer (Level 1 & 2) \r\nMulesoft Certified Platform Architect.\r\nI work <TBD>\r\nI Use: DataWeave, Javascript, Java & Python",
+    "twitter_username": null,
+    "public_repos": 8,
+    "public_gists": 0,
+    "followers": 0,
+    "following": 2,
+    "created_at": "2023-06-11T09:23:40Z",
+    "last_updated": "2025-10-21T08:39:14Z"
+}
+
 
 // GET /users/:userId - fetches from GitHub API
-app.get('/users/:userId', async (req, res) => {
+app.get('/ws/rest/users/:userId', async (req, res) => {
   const userId = req.params.userId;
   
   try {
     // Note: 'fetch' is usually available in modern Node.js environments
-    const response = await fetch(`https://api.github.com/users/${userId}`, {
-      headers: {
-        'User-Agent': 'Express-App'
-      }
-    });
+    // const response = await fetch(`https://api.github.com/users/${userId}`, {
+    //   headers: {
+    //     'User-Agent': 'Express-App'
+    //   }
+    // });
     
-    if (!response.ok) {
-      return res.status(response.status).json({ 
-        error: 'User not found or API error' 
-      });
-    }
+    // if (!response.ok) {
+    //   return res.status(response.status).json({ 
+    //     error: 'User not found or API error' 
+    //   });
+    // }
     
-    const userData = await response.json();
-    res.json(userData);
+    // const userData = await response.json();
+    // res.json(userData);
+    res.json(user1);
   } catch (error) {
     res.status(500).json({ 
       error: 'Failed to fetch user data',
@@ -36,24 +109,25 @@ app.get('/users/:userId', async (req, res) => {
 });
 
 // GET /app/users/:userId - fetches from GitHub API
-app.get('/app/users/:userId', async (req, res) => {
+app.get('/app/ws/rest/users/:userId', async (req, res) => {
   const userId = req.params.userId;
   
   try {
-    const response = await fetch(`https://api.github.com/users/${userId}`, {
-      headers: {
-        'User-Agent': 'Express-App'
-      }
-    });
+  //   const response = await fetch(`https://api.github.com/users/${userId}`, {
+  //     headers: {
+  //       'User-Agent': 'Express-App'
+  //     }
+  //   });
     
-    if (!response.ok) {
-      return res.status(response.status).json({ 
-        error: 'User not found or API error' 
-      });
-    }
+  //   if (!response.ok) {
+  //     return res.status(response.status).json({ 
+  //       error: 'User not found or API error' 
+  //     });
+  //   }
     
-    const userData = await response.json();
-    res.json(userData);
+  //   const userData = await response.json();
+  //   res.json(userData);
+  res.json(user2);
   } catch (error) {
     res.status(500).json({ 
       error: 'Failed to fetch user data',
@@ -65,7 +139,7 @@ app.get('/app/users/:userId', async (req, res) => {
 // --- NEW ENDPOINTS ADDED BELOW ---
 
 // POST /app/user - Creates a new user resource
-app.post('/app/user', (req, res) => {
+app.post('/app/ws/rest/user', (req, res) => {
     const correlationId = req.header('x-correlation-id');
     const userPayload = req.body; // JSON body is available here
 
@@ -87,7 +161,7 @@ app.post('/app/user', (req, res) => {
 });
 
 // POST /user - Creates a new user resource
-app.post('/user', (req, res) => {
+app.post('/ws/rest/user', (req, res) => {
     const correlationId = req.header('x-correlation-id');
     const userPayload = req.body;
 
