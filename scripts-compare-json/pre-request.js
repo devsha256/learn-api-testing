@@ -19,8 +19,8 @@ pm.collectionVariables.set("current_report_index", currentCount.toString());
 console.log("Processing request #" + currentCount + ": " + pm.info.requestName);
 
 
-const muleBaseUrl = pm.collectionVariables.get("mule_base_url");
-const boomiBaseUrl = pm.collectionVariables.get("boomi_base_url");
+const muleBaseUrl = pm.variables.replaceIn(pm.collectionVariables.get("mule_base_url"));
+const boomiBaseUrl = pm.variables.replaceIn(pm.collectionVariables.get("boomi_base_url"));
 
 
 if (!muleBaseUrl || !boomiBaseUrl) {
@@ -31,7 +31,7 @@ if (!muleBaseUrl || !boomiBaseUrl) {
 
 const currentRequest = pm.request;
 const method = currentRequest.method;
-const requestUrl = pm.request.url.toString();
+const requestUrl = pm.variables.replaceIn(pm.request.url.toString());
 
 
 function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
