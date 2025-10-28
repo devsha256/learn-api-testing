@@ -2,29 +2,30 @@
 // FILTER CONFIGURATION
 // ========================================
 const filters = {
-    // Define your filters here (Table.Field: value)
-    // 'Logs.Status': 'active',
-    // 'Logs.Level': 'error',
-    // 'Users.UserId': '12345',
-    // 'Logs.Timestamp': '>2025-10-01',
+    // Define your filters here (uppercase database field names)
+    // 'STATUS': 'SUCCESS',
+    // 'ENV': 'PROD',
+    // 'BUSINESSUNIT': 'Sales',
+    // 'PROCESSNAME': 'OrderProcessing',
+    // 'DATETIMESTAMP': '>2025-10-28T12:00:00Z',
 };
 
 // ========================================
-// DATABASE FIELDS CONFIGURATION
+// DATABASE FIELDS (UPPERCASE)
 // ========================================
 const dbFields = [
-    'Logs.Id',
-    'Logs.Timestamp',
-    'Logs.Level',
-    'Logs.Message',
-    'Users.UserId',
-    'Sessions.SessionId',
-    'Logs.IpAddress',
-    'Logs.Status',
-    'Logs.ResponseTime',
-    'Logs.ErrorCode',
-    'Logs.Method',
-    'Logs.Endpoint'
+    'CORRELATIONID',
+    'ID',
+    'ENV',
+    'PROCESSNAME',
+    'APINAME',
+    'BUSINESSUNIT',
+    'PROCESSID',
+    'MESSAGE',
+    'STATUS',
+    'ERRORMESSAGE',
+    'DATETIMESTAMP',
+    'CSTDATETIMESTAMP'
 ];
 
 // ========================================
@@ -49,10 +50,10 @@ const getOperatorAndValue = (value) => {
         return { operator: '!=', formattedValue: `'${valueStr.substring(1)}'` };
     }
     
-    // Comparison operators (>, <, >=, <=)
+    // Comparison operators (>=, <=, >, <)
     if (/^[><]=?/.test(valueStr)) {
         const match = valueStr.match(/^([><]=?)(.+)/);
-        return { operator: match[1], formattedValue: match[2] };
+        return { operator: match[1], formattedValue: `'${match[2]}'` };
     }
     
     // Numeric value
@@ -66,7 +67,7 @@ const getOperatorAndValue = (value) => {
 
 /**
  * Creates a SQL condition string from field and value
- * @param {string} field - Database field name
+ * @param {string} field - Database field name (uppercase)
  * @param {string} value - Filter value
  * @returns {string} - SQL condition
  */
