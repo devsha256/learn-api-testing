@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "echo 'Please use either \"npm run rest\" or \"npm run soap\"'",
+    "rest": "node rest/index.js",
+    "soap": "node soap/index.js"
   },
   "keywords": [],
   "author": "",
