@@ -4,14 +4,18 @@ if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) 
     return;
 }
 
+
 const isCollectionRunner = pm.info.iteration > 0;
 const isIndividualExecution = !isCollectionRunner;
 
+
 console.log("Request: " + pm.info.requestName + ", Individual: " + isIndividualExecution);
+
 
 let attempts = 0;
 const maxAttempts = 20;
 const pollInterval = 500;
+
 
 function waitForBoomiResponse() {
     attempts++;
@@ -32,7 +36,9 @@ function waitForBoomiResponse() {
     }
 }
 
+
 waitForBoomiResponse();
+
 
 function executeComparison() {
     const boomiResponseRaw = pm.collectionVariables.get("boomi_response");
@@ -42,18 +48,24 @@ function executeComparison() {
     const requestName = pm.collectionVariables.get("temp_request_name") || pm.info.requestName;
     const curlCommand = pm.collectionVariables.get("temp_request_curl") || "";
 
+
     if (!boomiResponseRaw || boomiResponseRaw === "" || boomiResponseRaw.startsWith("ERROR:")) {
         console.error("Boomi response invalid");
         return;
     }
 
+    const skipPayloadLogging = pm.collectionVariables.get("skip_payload_logging") === "true";
+
+
     const exemptedFieldsStr = pm.collectionVariables.get("exempted_fields");
     const exemptedFields = exemptedFieldsStr ? JSON.parse(exemptedFieldsStr) : [];
+
 
     // Parse responses
     let boomi, mule;
     try { boomi = JSON.parse(boomiResponseRaw); } catch (e) { boomi = boomiResponseRaw; }
     try { mule = JSON.parse(mulesoftResponseRaw); } catch (e) { mule = mulesoftResponseRaw; }
+
 
     // ===== IMPROVED ARRAY ALIGNMENT WITH LCS =====
     
@@ -225,20 +237,16 @@ function executeComparison() {
             
             while (bIdx < bValues.length || mIdx < mValues.length) {
                 if (bIdx >= bValues.length) {
-                    // Only mule remaining
                     aligned.push({ bIdx: null, mIdx: mIdx });
                     mIdx++;
                 } else if (mIdx >= mValues.length) {
-                    // Only boomi remaining
                     aligned.push({ bIdx: bIdx, mIdx: null });
                     bIdx++;
                 } else if (bValues[bIdx] === mValues[mIdx]) {
-                    // Match
                     aligned.push({ bIdx: bIdx, mIdx: mIdx });
                     bIdx++;
                     mIdx++;
                 } else {
-                    // Check if current boomi exists ahead in mule
                     let foundInMule = -1;
                     for (let i = mIdx + 1; i < Math.min(mIdx + 10, mValues.length); i++) {
                         if (bValues[bIdx] === mValues[i]) {
@@ -247,7 +255,6 @@ function executeComparison() {
                         }
                     }
                     
-                    // Check if current mule exists ahead in boomi
                     let foundInBoomi = -1;
                     for (let i = bIdx + 1; i < Math.min(bIdx + 10, bValues.length); i++) {
                         if (mValues[mIdx] === bValues[i]) {
@@ -257,24 +264,20 @@ function executeComparison() {
                     }
                     
                     if (foundInMule === -1 && foundInBoomi === -1) {
-                        // Both only exist in their respective arrays
                         aligned.push({ bIdx: bIdx, mIdx: null });
                         aligned.push({ bIdx: null, mIdx: mIdx });
                         bIdx++;
                         mIdx++;
                     } else if (foundInMule !== -1 && (foundInBoomi === -1 || (foundInMule - mIdx) <= (foundInBoomi - bIdx))) {
-                        // Current mule is unique, advance it
                         aligned.push({ bIdx: null, mIdx: mIdx });
                         mIdx++;
                     } else {
-                        // Current boomi is unique, advance it
                         aligned.push({ bIdx: bIdx, mIdx: null });
                         bIdx++;
                     }
                 }
             }
             
-            // Create mapping
             aligned.forEach(pair => {
                 if (pair.bIdx !== null && pair.mIdx !== null) {
                     alignmentMap.boomi.set(bItems[pair.bIdx].idx, mItems[pair.mIdx].idx);
@@ -313,12 +316,10 @@ function executeComparison() {
                 });
                 leftIdx++;
             } else {
-                // Check if this is a mapped array element
                 const mappedRight = arrayMap.boomi.get(leftIdx);
                 const mappedLeft = arrayMap.mule.get(rightIdx);
                 
                 if (mappedRight === rightIdx) {
-                    // Aligned array elements
                     aligned.push({
                         boomi: leftLine,
                         mule: rightLine,
@@ -327,7 +328,6 @@ function executeComparison() {
                     leftIdx++;
                     rightIdx++;
                 } else if (leftLine.arrayPath && !mappedRight) {
-                    // Unmatched left array element
                     aligned.push({
                         boomi: leftLine,
                         mule: { text: '', indent: leftLine.indent, isEmpty: true, path: leftLine.path },
@@ -335,7 +335,6 @@ function executeComparison() {
                     });
                     leftIdx++;
                 } else if (rightLine.arrayPath && !mappedLeft) {
-                    // Unmatched right array element
                     aligned.push({
                         boomi: { text: '', indent: rightLine.indent, isEmpty: true, path: rightLine.path },
                         mule: rightLine,
@@ -343,7 +342,6 @@ function executeComparison() {
                     });
                     rightIdx++;
                 } else if (leftLine.path === rightLine.path && leftLine.type === rightLine.type) {
-                    // Regular path match
                     let status = 'match';
                     if (leftLine.text !== rightLine.text && !leftLine.type) {
                         status = 'mismatch';
@@ -357,7 +355,6 @@ function executeComparison() {
                     leftIdx++;
                     rightIdx++;
                 } else {
-                    // Different paths - determine which to advance
                     let rightHasPath = false;
                     for (let i = rightIdx + 1; i < Math.min(rightIdx + 30, rightLines.length); i++) {
                         if (rightLines[i].path === leftLine.path && rightLines[i].type === leftLine.type) {
@@ -389,7 +386,6 @@ function executeComparison() {
                         });
                         rightIdx++;
                     } else {
-                        // Both exist - advance based on path comparison
                         if (leftLine.path < rightLine.path) {
                             aligned.push({
                                 boomi: leftLine,
@@ -441,27 +437,30 @@ function executeComparison() {
     
     const totalLines = aligned.length;
 
+
     console.log("Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
+
 
     // Tests
     pm.test("Boomi API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]));
     pm.test("MuleSoft API responded", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]));
     pm.test("All non-exempted fields match", () => pm.expect(totalMismatches).to.equal(0));
 
+
     const matchPercentage = totalLines > 0 ? Math.round(((totalLines - totalMismatches - totalExempted) / totalLines) * 100) : 100;
     const statusText = totalMismatches > 0 ? 'FAILED' : 'PASSED';
 
-        // Store report data - NO TRUNCATION ANYWHERE
+
     function minifyResponse(text) {
         if (!text) return "";
         try { 
-            // Minify JSON but don't truncate
-            return JSON.stringify(JSON.parse(text.trim()));
+            const minified = JSON.stringify(JSON.parse(text.trim()));
+            return minified.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         } catch (e) { 
-            // If not JSON, return as-is without truncation
-            return text.trim();
+            return text.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         }
     }
+
 
     const statsObj = {
         totalLines: totalLines,
@@ -475,24 +474,27 @@ function executeComparison() {
         timestamp: new Date().toISOString()
     };
 
+
     const reportEntry = {
         serialNumber: parseInt(reportIndex),
         requestName: requestName,
-        curlCommand: curlCommand,  // FULL cURL stored here
-        boomiResponse: minifyResponse(boomiResponseRaw),
-        mulesoftResponse: minifyResponse(mulesoftResponseRaw),
+        curlCommand: curlCommand.replace(/\\/g, '\\\\').replace(/"/g, '\\"'),
+        boomiResponse: skipPayloadLogging ? "[PAYLOAD_SKIPPED]" : minifyResponse(boomiResponseRaw),
+        mulesoftResponse: skipPayloadLogging ? "[PAYLOAD_SKIPPED]" : minifyResponse(mulesoftResponseRaw),
         statistics: statsObj
     };
 
+
     const paddedIndex = reportIndex.padStart(3, '0');
     
-    // Store with full data
     pm.collectionVariables.set("report_data_" + paddedIndex, JSON.stringify(reportEntry));
     
     console.log("Report stored with cURL length: " + curlCommand.length);
 
+
     pm.collectionVariables.set("temp_request_name", "");
     pm.collectionVariables.set("temp_request_curl", "");
+
 
 
 
@@ -523,7 +525,9 @@ function executeComparison() {
             </tr>`;
         }).join("");
 
+
         const headerBg = totalMismatches > 0 ? '#c0392b' : '#27ae60';
+
 
         const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">

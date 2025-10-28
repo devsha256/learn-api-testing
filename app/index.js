@@ -32,7 +32,7 @@ const user1 = {
     "location": "Kolkata, India",
     "email": null,
     "hireable": null,
-    "bio": "I am Mulesoft Certified Developer (Level 1 & 2) \r\nMulesoft Certified Platform Architect.\r\nI work <TBD>\r\nI Use: DataWeave, Javascript, Java & Python",
+    "bio": "I am a \"Go, get it!\" kind of person, who is also a Mulesoft Certified Developer (Level 1 & 2) \r\nMulesoft Certified Platform Architect.\r\nI work <TBD>\r\nI Use: DataWeave, Javascript, Java & Python",
     "twitter_username": null,
     "public_repos": 8,
     "public_gists": 0,
