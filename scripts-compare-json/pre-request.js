@@ -4,31 +4,38 @@ if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) 
     return;
 }
 
+
 const requestCounter = pm.collectionVariables.get("report_request_count");
 if (!requestCounter || requestCounter === "0") {
     pm.collectionVariables.set("report_request_count", "0");
 }
 
+
 const currentCount = parseInt(pm.collectionVariables.get("report_request_count") || "0") + 1;
 pm.collectionVariables.set("report_request_count", currentCount.toString());
 pm.collectionVariables.set("current_report_index", currentCount.toString());
 
+
 console.log("Processing request #" + currentCount + ": " + pm.info.requestName);
+
 
 const muleBaseUrl = pm.collectionVariables.get("mule_base_url");
 const boomiBaseUrl = pm.collectionVariables.get("boomi_base_url");
+
 
 if (!muleBaseUrl || !boomiBaseUrl) {
     console.error("Missing base URLs in collection variables");
     return;
 }
 
+
 const currentRequest = pm.request;
 const method = currentRequest.method;
-const requestUrl = pm.request.url;
+const requestUrl = pm.request.url.toString();
+
 
 function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
-    const fullUrl = requestUrl.toString();
+    const fullUrl = requestUrl;
     
     // Simply replace mule base with boomi base, then remove service name
     let result = fullUrl.replace(muleBase, boomiBase);
@@ -40,19 +47,24 @@ function transformMuleUrlToBoomi(requestUrl, muleBase, boomiBase) {
 }
 
 
+
 const boomiUrl = transformMuleUrlToBoomi(requestUrl, muleBaseUrl, boomiBaseUrl);
 
-console.log("Mule URL: " + requestUrl.toString());
+
+console.log("Mule URL: " + requestUrl);
 console.log("Boomi URL: " + boomiUrl);
+
 
 if (!boomiUrl) {
     console.error("Failed to generate Boomi URL");
     return;
 }
 
+
 // Collect headers with RESOLVED VALUES (not variables)
 const headers = {};
 const excludedHeaders = ['host', 'content-length', 'connection', 'user-agent', 'postman-token'];
+
 
 currentRequest.headers.each(function(header) {
     const headerKey = header.key.toLowerCase();
@@ -63,8 +75,10 @@ currentRequest.headers.each(function(header) {
     }
 });
 
+
 let requestBody = null;
 let bodyMode = null;
+
 
 if (currentRequest.body && ['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) !== -1) {
     bodyMode = currentRequest.body.mode;
@@ -100,6 +114,7 @@ if (currentRequest.body && ['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) !=
     }
 }
 
+
 if (requestBody && method !== 'GET') {
     const existingContentType = headers['Content-Type'] || headers['content-type'];
     if (!existingContentType && bodyMode === 'raw') {
@@ -112,7 +127,9 @@ if (requestBody && method !== 'GET') {
     }
 }
 
+
 const authType = pm.collectionVariables.get("boomi_auth_type") || "same";
+
 
 if (authType !== "same") {
     if (authType === "basic") {
@@ -135,11 +152,13 @@ if (authType !== "same") {
     }
 }
 
+
 const boomiRequest = {
     url: boomiUrl,
     method: method,
     header: headers
 };
+
 
 if (requestBody) {
     if (bodyMode === 'raw') {
@@ -153,12 +172,15 @@ if (requestBody) {
     }
 }
 
+
 // Generate COMPLETE cURL with resolved values
-let curlCommand = 'curl --location \'' + requestUrl.toString() + '\'';
+let curlCommand = 'curl --location \'' + requestUrl + '\'';
+
 
 if (method !== 'GET') {
     curlCommand += ' \\\n--request ' + method;
 }
+
 
 // Add all headers with RESOLVED values
 const headerKeys = Object.keys(headers);
@@ -168,17 +190,21 @@ headerKeys.forEach(function(headerKey) {
     curlCommand += ' \\\n--header \'' + headerKey + ': ' + escapedValue + '\'';
 });
 
+
 // Add COMPLETE body without any truncation
 if (requestBody && bodyMode === 'raw') {
     let escapedBody = String(requestBody).replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
     curlCommand += ' \\\n--data-raw \'' + escapedBody + '\'';
 }
 
+
 // Store in collection variable - NO LENGTH LIMIT
 pm.collectionVariables.set("temp_request_name", pm.info.requestName);
 pm.collectionVariables.set("temp_request_curl", curlCommand);
 
+
 console.log("cURL generated successfully, length: " + curlCommand.length + " characters");
+
 
 pm.sendRequest(boomiRequest, function(err, response) {
     if (err) {
