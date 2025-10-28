@@ -47,6 +47,7 @@ const customerV2XmlResponse = `
                 <id>CUST-001</id>
                 <name>Acme Corp.</name>
                 <status>Active</status>
+                <isActive>false</isActive>
                 <billingAddress>
                     <street>123 Integration Way</street>
                     <city>MuleCity</city>

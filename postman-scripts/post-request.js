@@ -4,14 +4,18 @@ if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) 
     return;
 }
 
+
 const isCollectionRunner = pm.info.iteration > 0;
 const isIndividualExecution = !isCollectionRunner;
 
+
 console.log("Request: " + pm.info.requestName + ", Individual: " + isIndividualExecution);
+
 
 let attempts = 0;
 const maxAttempts = 20;
 const pollInterval = 500;
+
 
 function waitForBoomiResponse() {
     attempts++;
@@ -32,7 +36,9 @@ function waitForBoomiResponse() {
     }
 }
 
+
 waitForBoomiResponse();
+
 
 function executeComparison() {
     const boomiResponseRaw = pm.collectionVariables.get("boomi_response");
@@ -42,13 +48,50 @@ function executeComparison() {
     const requestName = pm.collectionVariables.get("temp_request_name") || pm.info.requestName;
     const curlCommand = pm.collectionVariables.get("temp_request_curl") || "";
 
+
     if (!boomiResponseRaw || boomiResponseRaw === "" || boomiResponseRaw.startsWith("ERROR:")) {
         console.error("Boomi response invalid");
         return;
     }
 
-    const exemptedFieldsStr = pm.collectionVariables.get("exempted_xml_paths");
+
+    const exemptedFieldsStr = pm.collectionVariables.get("exempted_fields");
     const exemptedFields = exemptedFieldsStr ? JSON.parse(exemptedFieldsStr) : [];
+
+    // ===== NEW: ENHANCED XPATH-STYLE EXEMPTION CHECKER =====
+    function isTagExempted(tag, exemptedPatterns) {
+        if (!tag || !exemptedPatterns || exemptedPatterns.length === 0) return false;
+        
+        // Remove namespace prefix (e.g., "soap:Envelope" -> "Envelope")
+        const cleanTag = tag.replace(/\w+:/g, '');
+        
+        for (let i = 0; i < exemptedPatterns.length; i++) {
+            const pattern = exemptedPatterns[i].trim();
+            
+            // Pattern 1: Descendant selector // (matches tag anywhere)
+            if (pattern.startsWith('//')) {
+                const elementName = pattern.substring(2);
+                if (cleanTag === elementName || cleanTag.indexOf(elementName) !== -1) {
+                    return true;
+                }
+            }
+            // Pattern 2: Wildcard pattern (contains *)
+            else if (pattern.indexOf('*') !== -1) {
+                const regexPattern = '^' + pattern.replace(/\*/g, '.*') + '$';
+                if (new RegExp(regexPattern).test(cleanTag)) {
+                    return true;
+                }
+            }
+            // Pattern 3: Simple tag name match
+            else {
+                if (cleanTag === pattern || cleanTag.indexOf(pattern) !== -1) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
 
     // HTML escape function
     function escapeHtml(text) {
@@ -60,6 +103,7 @@ function executeComparison() {
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
     }
+
 
     // Parse XML to simple tree structure
     function parseXML(xmlString) {
@@ -170,11 +214,14 @@ function executeComparison() {
     }
 
 
+
     const boomiLines = parseXML(boomiResponseRaw);
     const muleLines = parseXML(mulesoftResponseRaw);
 
+
     console.log("Boomi lines: " + boomiLines.length);
     console.log("Mule lines: " + muleLines.length);
+
 
     // Align XML lines
     function alignXMLLines(leftLines, rightLines) {
@@ -223,26 +270,28 @@ function executeComparison() {
         return aligned;
     }
 
+
     const aligned = alignXMLLines(boomiLines, muleLines);
 
+
     console.log("Aligned lines: " + aligned.length);
+
 
     // Calculate stats
     let totalMismatches = 0;
     let totalExempted = 0;
 
+
     aligned.forEach(function(pair) {
         const tag = pair.boomi.tag || pair.mule.tag;
         let isExempted = false;
         
+        // ===== MODIFIED: ENHANCED EXEMPTION CHECK (ONLY CHANGE) =====
         if (tag) {
-            for (let i = 0; i < exemptedFields.length; i++) {
-                if (tag.indexOf(exemptedFields[i]) !== -1) {
-                    pair.status = 'exempted';
-                    isExempted = true;
-                    totalExempted++;
-                    break;
-                }
+            if (isTagExempted(tag, exemptedFields)) {
+                pair.status = 'exempted';
+                isExempted = true;
+                totalExempted++;
             }
         }
         
@@ -251,22 +300,27 @@ function executeComparison() {
         }
     });
 
+
     const totalLines = aligned.length;
     const matchPercentage = totalLines > 0 ? Math.round(((totalLines - totalMismatches - totalExempted) / totalLines) * 100) : 100;
     const statusText = totalMismatches > 0 ? 'FAILED' : 'PASSED';
 
+
     console.log("XML Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
+
 
     // Tests
     pm.test("Boomi SOAP API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204, 500]));
     pm.test("MuleSoft SOAP API responded", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204, 500]));
     pm.test("All non-exempted XML elements match", () => pm.expect(totalMismatches).to.equal(0));
 
+
     // Store report
     function minifyXML(xml) {
         if (!xml) return "";
         return xml.trim().replace(/\s+/g, ' ').replace(/>\s+</g, '><');
     }
+
 
     const statsObj = {
         totalLines: totalLines,
@@ -280,6 +334,7 @@ function executeComparison() {
         timestamp: new Date().toISOString()
     };
 
+
     const reportEntry = {
         serialNumber: parseInt(reportIndex),
         requestName: requestName,
@@ -289,9 +344,11 @@ function executeComparison() {
         statistics: statsObj
     };
 
+
     pm.collectionVariables.set("report_data_" + reportIndex.padStart(3, '0'), JSON.stringify(reportEntry));
     pm.collectionVariables.set("temp_request_name", "");
     pm.collectionVariables.set("temp_request_curl", "");
+
 
     // Visualizer for individual execution
     if (isIndividualExecution) {
@@ -321,7 +378,9 @@ function executeComparison() {
             </tr>`;
         }).join("");
 
+
         const headerBg = totalMismatches > 0 ? '#c0392b' : '#27ae60';
+
 
         const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
