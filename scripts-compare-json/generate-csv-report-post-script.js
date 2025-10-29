@@ -41,7 +41,8 @@ function escapeCSV(text) {
 }
 
 // Full detailed CSV
-let csvFullContent = 'Serial,Request Name,Status,Match %,Total Lines,Matched,Mismatched,Exempted,Boomi Status,MuleSoft Status,Timestamp,cURL Command,Boomi Response,MuleSoft Response\n';
+let csvFullContent = 'Serial,Request Name,Status,Match %,Total Lines,Matched,Mismatched,Exempted,Exempted Fields,Boomi Status,MuleSoft Status,Timestamp,cURL Command,Boomi Response,MuleSoft Response\n';
+
 
 reports.forEach(function(report) {
     const stats = report.statistics;
@@ -54,6 +55,7 @@ reports.forEach(function(report) {
         stats.matchedLines,
         stats.mismatchedLines,
         stats.exemptedLines,
+        escapeCSV(stats.exemptedFields || ''), 
         stats.boomiStatus,
         stats.mulesoftStatus,
         escapeCSV(stats.timestamp),
@@ -66,7 +68,8 @@ reports.forEach(function(report) {
 });
 
 // Summary CSV
-let csvSummaryContent = 'Serial,Request Name,Status,Match %,Total Lines,Matched,Mismatched,Exempted,Boomi Status,MuleSoft Status,Timestamp\n';
+let csvSummaryContent = 'Serial,Request Name,Status,Match %,Total Lines,Matched,Mismatched,Exempted,Exempted Fields,Boomi Status,MuleSoft Status,Timestamp\n';
+
 
 reports.forEach(function(report) {
     const stats = report.statistics;
@@ -79,6 +82,7 @@ reports.forEach(function(report) {
         stats.matchedLines,
         stats.mismatchedLines,
         stats.exemptedLines,
+        escapeCSV(stats.exemptedFields || ''),
         stats.boomiStatus,
         stats.mulesoftStatus,
         escapeCSV(stats.timestamp)
@@ -120,6 +124,7 @@ let tableRows = reports.map(function(report) {
         <td>${stats.matchedLines}</td>
         <td>${stats.mismatchedLines}</td>
         <td>${stats.exemptedLines}</td>
+        <td>${stats.exemptedFields || ''}</td> 
         <td>${stats.boomiStatus}</td>
         <td>${stats.mulesoftStatus}</td>
         <td class="timestamp">${new Date(stats.timestamp).toLocaleString()}</td>
@@ -196,6 +201,7 @@ tr:hover{background:#e3f2fd}
 <th>Matched</th>
 <th>Mismatch</th>
 <th>Exempt</th>
+<th>Exempted Fields</th>
 <th>Boomi</th>
 <th>Mule</th>
 <th>Timestamp</th>

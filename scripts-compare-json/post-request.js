@@ -3,7 +3,7 @@
 // ========================================================================
 const regressionMode = pm.collectionVariables.get("regression_mode");
 
-if ((pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) && regressionMode !== "true") {
+if ((pm.info.requestName.startsWith("[")) && regressionMode !== "true") {
     console.log("Skipping utility request: " + pm.info.requestName);
     return;
 }
@@ -415,30 +415,62 @@ function executeComparison() {
     }
     
     const aligned = alignWithArrays(boomiLines, muleLines, arrayAlignment);
-    
-    // Calculate stats
+
+    // Helper function using regex for exact field matching
+    function isFieldExempted(path, exemptedField) {
+        if (!path || !exemptedField) return false;
+        
+        // Escape special regex characters in field name
+        const escapedField = exemptedField.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        
+        // Match field as:
+        // - Exact match: ^field$
+        // - After dot: \.field($|\.)
+        // - After bracket: \]\.field($|\.)
+        const pattern = new RegExp(
+            '^' + escapedField + '$|' +           // Exact match
+            '\\.' + escapedField + '($|\\.)|' +   // After dot
+            '\\]\\.' + escapedField + '($|\\.)'   // After bracket
+        );
+        
+        return pattern.test(path);
+    }
+
+    // Calculate stats and track exempted fields
     let totalMismatches = 0;
     let totalExempted = 0;
-    
-    aligned.forEach(pair => {
+    const exemptedFieldsFound = [];
+
+    aligned.forEach(function(pair) {
         const path = pair.boomi.path || pair.mule.path;
         let isExempted = false;
+        let matchedExemptField = null;
         
         if (path) {
             for (let j = 0; j < exemptedFields.length; j++) {
-                if (path.includes(exemptedFields[j])) {
+                if (isFieldExempted(path, exemptedFields[j])) {
                     pair.status = 'exempted';
                     isExempted = true;
+                    matchedExemptField = exemptedFields[j];
                     totalExempted++;
+                    
+                    // Track which exempted field was found (avoid duplicates)
+                    if (exemptedFieldsFound.indexOf(exemptedFields[j]) === -1) {
+                        exemptedFieldsFound.push(exemptedFields[j]);
+                    }
                     break;
                 }
             }
         }
         
-        if (!isExempted && (pair.status === 'mismatch' || pair.status === 'only_boomi' || pair.status === 'only_mule')) {
+        if (!isExempted && (pair.status === 'mismatch' || pair.status === 'onlyboomi' || pair.status === 'onlymule')) {
             totalMismatches++;
         }
     });
+
+    // Create comma-separated list of exempted fields found
+    const exemptedFieldsList = exemptedFieldsFound.length > 0 ? exemptedFieldsFound.join(', ') : '';
+    console.log("Exempted fields found in this request: " + (exemptedFieldsList || "None"));
     
     const totalLines = aligned.length;
     console.log("Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
@@ -446,6 +478,7 @@ function executeComparison() {
     // Tests
     pm.test("Boomi API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]));
     pm.test("MuleSoft API responded", () => pm.expect(pm.response.code).to.be.oneOf([200, 201, 202, 204]));
+    pm.test("Boomi & Mule Status code match", () => pm.expect(boomiStatus).to.equal(pm.response.code));
     pm.test("All non-exempted fields match", () => pm.expect(totalMismatches).to.equal(0));
 
 
@@ -467,6 +500,7 @@ function executeComparison() {
         matchedLines: totalLines - totalMismatches - totalExempted,
         mismatchedLines: totalMismatches,
         exemptedLines: totalExempted,
+        exemptedFields: exemptedFieldsList,
         matchPercentage: matchPercentage,
         status: statusText,
         boomiStatus: boomiStatus,
