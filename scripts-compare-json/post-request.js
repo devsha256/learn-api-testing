@@ -422,11 +422,7 @@ function executeComparison() {
         
         // Escape special regex characters in field name
         const escapedField = exemptedField.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-        
-        // Match field as:
-        // - Exact match: ^field$
-        // - After dot: \.field($|\.)
-        // - After bracket: \]\.field($|\.)
+
         const pattern = new RegExp(
             '^' + escapedField + '$|' +           // Exact match
             '\\.' + escapedField + '($|\\.)|' +   // After dot
@@ -439,6 +435,8 @@ function executeComparison() {
     // Calculate stats and track exempted fields
     let totalMismatches = 0;
     let totalExempted = 0;
+    let totalMatched = 0;
+    let totalOnlyMule = 0;  // Track but don't count as mismatch
     const exemptedFieldsFound = [];
 
     aligned.forEach(function(pair) {
@@ -446,6 +444,7 @@ function executeComparison() {
         let isExempted = false;
         let matchedExemptField = null;
         
+        // Check for exemption
         if (path) {
             for (let j = 0; j < exemptedFields.length; j++) {
                 if (isFieldExempted(path, exemptedFields[j])) {
@@ -463,17 +462,33 @@ function executeComparison() {
             }
         }
         
-        if (!isExempted && (pair.status === 'mismatch' || pair.status === 'onlyboomi' || pair.status === 'onlymule')) {
-            totalMismatches++;
+        // Count matches and mismatches
+        if (!isExempted) {
+            if (pair.status === 'match') {
+                // Values match perfectly
+                totalMatched++;
+            } else if (pair.status === 'mismatch') {
+                // Values exist in both but differ - COUNT AS MISMATCH
+                totalMismatches++;
+            } else if (pair.status === 'only_boomi') {
+                // Field in Boomi but missing in Mule - COUNT AS MISMATCH
+                totalMismatches++;
+            } else if (pair.status === 'only_mule') {
+                // Field in Mule but missing in Boomi - IGNORE (Mule can have extra fields)
+                totalOnlyMule++;
+            }
         }
     });
 
     // Create comma-separated list of exempted fields found
     const exemptedFieldsList = exemptedFieldsFound.length > 0 ? exemptedFieldsFound.join(', ') : '';
-    console.log("Exempted fields found in this request: " + (exemptedFieldsList || "None"));
-    
-    const totalLines = aligned.length;
-    console.log("Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
+
+    console.log("=== COMPARISON BREAKDOWN ===");
+    console.log("Exempted fields: " + (exemptedFieldsList || "None"));
+    console.log("Total matched: " + totalMatched);
+    console.log("Total mismatches: " + totalMismatches + " (includes only_boomi)");
+    console.log("Total exempted: " + totalExempted);
+    console.log("Only in Mule (ignored): " + totalOnlyMule);
 
     // Tests
     pm.test("Boomi API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]));
@@ -481,9 +496,28 @@ function executeComparison() {
     pm.test("Boomi & Mule Status code match", () => pm.expect(boomiStatus).to.equal(pm.response.code));
     pm.test("All non-exempted fields match", () => pm.expect(totalMismatches).to.equal(0));
 
+    const totalLines = aligned.length;
+    console.log("=== STATISTICS ===");
+    console.log("Total aligned lines: " + totalLines);
+    console.log("Matched: " + totalMatched);
+    console.log("Mismatches: " + totalMismatches);
+    console.log("Exempted: " + totalExempted);
+    console.log("Only in Mule (ignored): " + totalOnlyMule);
 
-    const matchPercentage = totalLines > 0 ? Math.round(((totalLines - totalMismatches - totalExempted) / totalLines) * 100) : 100;
-    const statusText = totalMismatches > 0 ? 'FAILED' : 'PASSED';
+    // Calculate match percentage based on actual matched lines
+    // Exclude only_mule from total since we ignore them
+    const totalComparedLines = totalMatched + totalMismatches + totalExempted;
+    const matchPercentage = totalComparedLines > 0 
+        ? Math.round((totalMatched / totalComparedLines) * 100 * 100) / 100 
+        : 0;
+
+    // Final status logic: PASSED only if zero mismatches
+    // (mismatch or only_boomi = FAILED)
+    const statusText = totalMismatches === 0 ? "PASSED" : "FAILED";
+
+    console.log("Match percentage: " + matchPercentage + "%");
+    console.log("Overall status: " + statusText);
+
 
     function minifyResponse(text) {
         if (!text) return "";
@@ -497,7 +531,7 @@ function executeComparison() {
 
     const statsObj = {
         totalLines: totalLines,
-        matchedLines: totalLines - totalMismatches - totalExempted,
+        matchedLines: totalMatched,
         mismatchedLines: totalMismatches,
         exemptedLines: totalExempted,
         exemptedFields: exemptedFieldsList,

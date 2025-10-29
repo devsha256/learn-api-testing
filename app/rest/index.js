@@ -127,7 +127,7 @@ app.get('/app/ws/rest/users/:userId', async (req, res) => {
     
   //   const userData = await response.json();
   //   res.json(userData);
-  res.json(user2);
+  res.json(user1);
   } catch (error) {
     res.status(500).json({ 
       error: 'Failed to fetch user data',
