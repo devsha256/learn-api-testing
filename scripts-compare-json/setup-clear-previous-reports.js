@@ -1,5 +1,6 @@
 const previousCount = parseInt(pm.collectionVariables.get("report_request_count") || "0");
 console.log("Starting cleanup - previous count: " + previousCount);
+
 let preserveVars = [];
 const preserveVarsStr = pm.collectionVariables.get("variables");
 if (preserveVarsStr) {
@@ -10,24 +11,33 @@ if (preserveVarsStr) {
         preserveVars = [];
     }
 }
+
 const systemVars = [
     "mule_base_url", "boomi_base_url", "exempted_fields", "boomi_auth_type",
     "boomi_username", "boomi_password", "boomi_bearer_token", "boomi_api_key",
     "boomi_api_key_header", "variables"
 ];
+
 const allPreservedVars = systemVars.concat(preserveVars);
 console.log("Will preserve " + allPreservedVars.length + " variables");
+
+// Clear report data
 let clearedReports = 0;
 for (let i = 1; i <= previousCount; i++) {
     const varName = "report_data_" + i.toString().padStart(3, '0');
     pm.collectionVariables.unset(varName);
     clearedReports++;
 }
+
+// Clear temporary variables INCLUDING regression variables
 const tempVars = [
     "report_request_count", "current_report_index", "temp_request_name",
     "temp_request_curl", "boomi_response", "boomi_status", "boomi_error",
-    "csv_full_report", "csv_summary_report"
+    "csv_full_report", "csv_summary_report",
+    // Regression-specific variables
+    "regression_mode", "regression_curl", "regression_request_name"
 ];
+
 let clearedTemp = 0;
 for (let i = 0; i < tempVars.length; i++) {
     const varName = tempVars[i];
@@ -36,6 +46,8 @@ for (let i = 0; i < tempVars.length; i++) {
         clearedTemp++;
     }
 }
+
+// Reset counter
 pm.collectionVariables.set("report_request_count", "0");
 console.log("Cleanup done: " + clearedReports + " reports, " + clearedTemp + " temp vars");
 

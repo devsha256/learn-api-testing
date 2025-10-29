@@ -1,16 +1,23 @@
-// Skip utility requests
-if (pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) {
+// ========================================================================
+// Skip utility requests EXCEPT in regression mode
+// ========================================================================
+const regressionMode = pm.collectionVariables.get("regression_mode");
+
+if ((pm.info.requestName.startsWith("_") || pm.info.requestName.startsWith("[")) && regressionMode !== "true") {
     console.log("Skipping utility request: " + pm.info.requestName);
     return;
+}
+
+// If in regression mode, log it
+if (regressionMode === "true") {
+    console.log("=== REGRESSION POST-REQUEST: Processing comparison ===");
 }
 
 
 const isCollectionRunner = pm.info.iteration > 0;
 const isIndividualExecution = !isCollectionRunner;
 
-
 console.log("Request: " + pm.info.requestName + ", Individual: " + isIndividualExecution);
-
 
 let attempts = 0;
 const maxAttempts = 20;
@@ -36,9 +43,7 @@ function waitForBoomiResponse() {
     }
 }
 
-
 waitForBoomiResponse();
-
 
 function executeComparison() {
     const boomiResponseRaw = pm.collectionVariables.get("boomi_response");
@@ -67,7 +72,7 @@ function executeComparison() {
     try { mule = JSON.parse(mulesoftResponseRaw); } catch (e) { mule = mulesoftResponseRaw; }
 
 
-    // ===== IMPROVED ARRAY ALIGNMENT WITH LCS =====
+    // ===== ARRAY ALIGNMENT WITH LCS =====
     
     function normalizeArrays(obj) {
         if (Array.isArray(obj)) {
@@ -436,10 +441,7 @@ function executeComparison() {
     });
     
     const totalLines = aligned.length;
-
-
     console.log("Comparison: " + totalMismatches + " mismatches, " + totalExempted + " exempted");
-
 
     // Tests
     pm.test("Boomi API responded", () => pm.expect(boomiStatus).to.be.oneOf([200, 201, 202, 204]));
@@ -450,7 +452,6 @@ function executeComparison() {
     const matchPercentage = totalLines > 0 ? Math.round(((totalLines - totalMismatches - totalExempted) / totalLines) * 100) : 100;
     const statusText = totalMismatches > 0 ? 'FAILED' : 'PASSED';
 
-
     function minifyResponse(text) {
         if (!text) return "";
         try { 
@@ -460,7 +461,6 @@ function executeComparison() {
             return text.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
         }
     }
-
 
     const statsObj = {
         totalLines: totalLines,
@@ -474,7 +474,6 @@ function executeComparison() {
         timestamp: new Date().toISOString()
     };
 
-
     const reportEntry = {
         serialNumber: parseInt(reportIndex),
         requestName: requestName,
@@ -484,19 +483,14 @@ function executeComparison() {
         statistics: statsObj
     };
 
-
     const paddedIndex = reportIndex.padStart(3, '0');
     
     pm.collectionVariables.set("report_data_" + paddedIndex, JSON.stringify(reportEntry));
     
     console.log("Report stored with cURL length: " + curlCommand.length);
 
-
     pm.collectionVariables.set("temp_request_name", "");
     pm.collectionVariables.set("temp_request_curl", "");
-
-
-
 
     // Visualizer
     if (isIndividualExecution) {
@@ -527,7 +521,6 @@ function executeComparison() {
 
 
         const headerBg = totalMismatches > 0 ? '#c0392b' : '#27ae60';
-
 
         const html = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
