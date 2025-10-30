@@ -250,45 +250,41 @@ const buildBoomiRequest = (boomiUrl, method, headers, requestBody, bodyMode) => 
 // ========================================================================
 // cURL Command Generation
 // ========================================================================
-const escapeForDoubleQuoteCurl = (str) => {
-  return String(str)
-    .replace(/\\/g, '\\\\')    // Escape backslashes FIRST
-    .replace(/"/g, '\\"')      // Escape double quotes
-    .replace(/\$/g, '\\$')     // Escape $ (prevents variable expansion)
-    .replace(/`/g, '\\`');     // Escape ` (prevents command substitution)
+const buildCurlBase = (requestUrl, method) => {
+    // CRITICAL FIX: Escape the URL before inserting it
+    const escapedUrl = escapeForCurl(requestUrl);
+    let curlCommand = `curl --location '${escapedUrl}'`;
+    
+    if (method !== 'GET') {
+        curlCommand += ` \\\n--request ${method}`;
+    }
+    return curlCommand;
 };
 
-const buildCurlBase = (requestUrl, method) => {
-  const escapedUrl = escapeForDoubleQuoteCurl(requestUrl);
-  let curlCommand = `curl --location "${escapedUrl}"`; // DOUBLE QUOTES
-  
-  if (method !== 'GET') {
-    curlCommand += ` \\\n--request ${method}`;
-  }
-  return curlCommand;
-};
 
 const addCurlHeaders = (curlCommand, headers) => {
-  if (!headers || typeof headers !== 'object') return curlCommand;
-  
-  Object.entries(headers).forEach(([key, value]) => {
-    if (value !== undefined && value !== null) {
-      const escapedValue = escapeForDoubleQuoteCurl(value);
-      curlCommand += ` \\\n--header "${key}: ${escapedValue}"`; // DOUBLE QUOTES
-    }
-  });
-  
-  return curlCommand;
+    if (!headers || typeof headers !== 'object') return curlCommand;
+    
+    Object.entries(headers).forEach(([key, value]) => {
+        if (value !== undefined && value !== null) {
+            const escapedValue = escapeForCurl(value);
+            curlCommand += ` \\\n--header '${key}: ${escapedValue}'`;
+        }
+    });
+    
+    return curlCommand;
 };
 
+
 const addCurlBody = (curlCommand, requestBody, bodyMode) => {
-  if (!requestBody || requestBody.trim() === '') return curlCommand;
-  
-  const escapedBody = escapeForDoubleQuoteCurl(requestBody);
-  curlCommand += ` \\\n--data "${escapedBody}"`; // DOUBLE QUOTES
-  
-  return curlCommand;
+    if (!requestBody || requestBody.trim() === '') return curlCommand;
+    
+    const escapedBody = escapeBody(requestBody);
+    curlCommand += ` \\\n--data-raw '${escapedBody}'`;  // Use --data-raw
+    
+    return curlCommand;
 };
+
 
 const generateCurlCommand = (requestUrl, method, headers, requestBody, bodyMode) => {
     let curlCommand = buildCurlBase(requestUrl, method);
