@@ -250,28 +250,44 @@ const buildBoomiRequest = (boomiUrl, method, headers, requestBody, bodyMode) => 
 // ========================================================================
 // cURL Command Generation
 // ========================================================================
+const escapeForDoubleQuoteCurl = (str) => {
+  return String(str)
+    .replace(/\\/g, '\\\\')    // Escape backslashes FIRST
+    .replace(/"/g, '\\"')      // Escape double quotes
+    .replace(/\$/g, '\\$')     // Escape $ (prevents variable expansion)
+    .replace(/`/g, '\\`');     // Escape ` (prevents command substitution)
+};
+
 const buildCurlBase = (requestUrl, method) => {
-    let curlCommand = `curl --location '${requestUrl}'`;
-    if (method !== 'GET') {
-        curlCommand += ` \\\n--request ${method}`;
-    }
-    return curlCommand;
+  const escapedUrl = escapeForDoubleQuoteCurl(requestUrl);
+  let curlCommand = `curl --location "${escapedUrl}"`; // DOUBLE QUOTES
+  
+  if (method !== 'GET') {
+    curlCommand += ` \\\n--request ${method}`;
+  }
+  return curlCommand;
 };
 
 const addCurlHeaders = (curlCommand, headers) => {
-    return Object.keys(headers).reduce((cmd, headerKey) => {
-        const headerValue = headers[headerKey];
-        const escapedValue = escapeForCurl(headerValue);
-        return `${cmd} \\\n--header '${headerKey}: ${escapedValue}'`;
-    }, curlCommand);
+  if (!headers || typeof headers !== 'object') return curlCommand;
+  
+  Object.entries(headers).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      const escapedValue = escapeForDoubleQuoteCurl(value);
+      curlCommand += ` \\\n--header "${key}: ${escapedValue}"`; // DOUBLE QUOTES
+    }
+  });
+  
+  return curlCommand;
 };
 
 const addCurlBody = (curlCommand, requestBody, bodyMode) => {
-    if (requestBody && bodyMode === 'raw') {
-        const escapedBody = escapeBody(requestBody);
-        return `${curlCommand} \\\n--data-raw '${escapedBody}'`;
-    }
-    return curlCommand;
+  if (!requestBody || requestBody.trim() === '') return curlCommand;
+  
+  const escapedBody = escapeForDoubleQuoteCurl(requestBody);
+  curlCommand += ` \\\n--data "${escapedBody}"`; // DOUBLE QUOTES
+  
+  return curlCommand;
 };
 
 const generateCurlCommand = (requestUrl, method, headers, requestBody, bodyMode) => {
