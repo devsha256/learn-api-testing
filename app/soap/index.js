@@ -1,12 +1,15 @@
 const express = require('express');
 const app = express();
-const PORT = 8000;
+const PORT = 8000; // Using a different port (8001) for the SOAP service
 
-// Middleware to parse JSON bodies in POST requests
-app.use(express.json());
+// Middleware to parse incoming request body as raw text, which is typical for XML/SOAP
+// The type '*/*' ensures it processes any content type, including text/xml or application/soap+xml
+app.use(express.text({ type: '*/*' }));
 
-// XML response template for the SOAP endpoints
-const customerXmlResponse = `
+// --- XML Response Templates ---
+
+// Response for successful GET requests
+const getCustomerXmlResponse = `
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
     <soap:Body>
         <getCustomerResponse xmlns="http://example.com/customer">
@@ -14,83 +17,80 @@ const customerXmlResponse = `
                 <id>CUST-001</id>
                 <name>Acme Corp.</name>
                 <status>Active</status>
-                <isActive>true</isActive>
                 <billingAddress>
                     <street>123 Integration Way</street>
                     <city>MuleCity</city>
                     <zip>90210</zip>
                 </billingAddress>
-                <orders>
-                  <order>
-                    <Id>OZ001</Id>
-                    <ProductId>PZ0001</ProductId>
-                    <ProductName>PP1</ProductName>
-                  </order>
-                  <order>
-                    <Id>OZ002</Id>
-                    <ProductId>PZ0002</ProductId>
-                    <ProductName>PP2</ProductName>
-                  </order>
-                </orders>
             </Customer>
         </getCustomerResponse>
     </soap:Body>
 </soap:Envelope>
-`.trim(); // .trim() removes leading/trailing whitespace
+`.trim();
 
-// XML response template for the SOAP endpoints
-const customerV2XmlResponse = `
+// Response for successful POST requests (201 Created)
+const createCustomerXmlResponse = `
 <soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/">
     <soap:Body>
-        <getCustomerResponse xmlns="http://example.com/customer">
-            <Customer>
-                <id>CUST-001</id>
-                <name>Acme Corp.</name>
-                <status>Active</status>
-                <isActive>false</isActive>
-                <billingAddress>
-                    <street>123 Integration Way</street>
-                    <city>MuleCity</city>
-                    <zip>90210</zip>
-                </billingAddress>
-                <gender>male</gender>
-                <orders>
-                  <order>
-                    <Id>OZ001</Id>
-                    <ProductId>PZ0001</ProductId>
-                    <ProductName>PP1</ProductName>
-                  </order>
-                  <order>
-                    <Id>OZ003</Id>
-                    <ProductId>PZ0003</ProductId>
-                    <ProductName>PP3</ProductName>
-                  </order>
-                </orders>
-            </Customer>
-        </getCustomerResponse>
+        <createCustomerResponse xmlns="http://example.com/customer">
+            <status>201</status>
+            <message>Customer resource created successfully.</message>
+            <newId>CUST-002</newId>
+        </createCustomerResponse>
     </soap:Body>
 </soap:Envelope>
-`.trim(); // .trim() removes leading/trailing whitespace
+`.trim();
 
-// --- NEW SOAP ENDPOINTS ---
+// --- SOAP ENDPOINTS ---
 
 // GET /app/customer - Returns XML/SOAP response
 app.get('/app/ws/soap/customer', (req, res) => {
     console.log('[GET /app/customer] Sending XML response.');
     res.set('Content-Type', 'application/xml');
-    res.status(200).send(customerV2XmlResponse);
+    res.status(200).send(getCustomerXmlResponse);
 });
 
-// GET /customer (Using the exact path requested) - Returns XML/SOAP response
+// GET /custome - Returns XML/SOAP response (uses exact path requested)
 app.get('/ws/soap/customer', (req, res) => {
-    console.log('[GET /customer] Sending XML response.');
+    console.log('[GET /custome] Sending XML response.');
     res.set('Content-Type', 'application/xml');
-    res.status(200).send(customerXmlResponse);
+    res.status(200).send(getCustomerXmlResponse);
 });
 
+// POST /app/customer - Accepts XML body and returns 201 Success
+app.post('/ws/soap/customer', (req, res) => {
+    const correlationId = req.header('x-crrelation-id') || 'N/A';
+    const requestBody = req.body; // Contains the raw XML body as a string
+
+    console.log(`[POST /app/customer] Correlation ID: ${correlationId}`);
+    console.log('[POST /app/customer] Received XML Body (simulated structure check):');
+    // In a real scenario, you would parse the XML (e.g., using 'xml2js' library) and validate it here.
+    console.log(requestBody.substring(0, 100) + '...'); // Log a snippet of the incoming XML
+
+    // Simulate successful creation
+    res.set('Content-Type', 'application/xml');
+    res.status(201).send(createCustomerXmlResponse);
+});
+
+// POST /app/customer - Accepts XML body and returns 201 Success
+app.post('/app/ws/soap/customer', (req, res) => {
+    const correlationId = req.header('x-crrelation-id') || 'N/A';
+    const requestBody = req.body; // Contains the raw XML body as a string
+
+    console.log(`[POST /app/customer] Correlation ID: ${correlationId}`);
+    console.log('[POST /app/customer] Received XML Body (simulated structure check):');
+    // In a real scenario, you would parse the XML (e.g., using 'xml2js' library) and validate it here.
+    console.log(requestBody.substring(0, 100) + '...'); // Log a snippet of the incoming XML
+
+    // Simulate successful creation
+    res.set('Content-Type', 'application/xml');
+    res.status(201).send(createCustomerXmlResponse);
+});
 
 
 // Start the server
 app.listen(PORT, () => {
-  console.log(`Server is running at http://localhost:${PORT}`);
+  console.log(`SOAP Server is running at http://localhost:${PORT}`);
+  console.log(`Endpoints available: GET /app/customer, GET /custome, POST /app/customer`);
 });
+
