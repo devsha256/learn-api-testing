@@ -4,7 +4,12 @@ const PORT = 8000;
 
 // Middleware to parse JSON bodies in POST requests
 app.use(express.json());
-
+const error = {
+  "errordetails": [{
+    "code": "E",
+    "message": "Invalid token at url at position 14."
+  }]
+}
 const user1 = {
     "login": "devsha256",
     "id": 136232364,
@@ -127,7 +132,7 @@ app.get('/app/ws/rest/users/:userId', async (req, res) => {
     
   //   const userData = await response.json();
   //   res.json(userData);
-  res.json(user1);
+  res.json(user2);
   } catch (error) {
     res.status(500).json({ 
       error: 'Failed to fetch user data',
