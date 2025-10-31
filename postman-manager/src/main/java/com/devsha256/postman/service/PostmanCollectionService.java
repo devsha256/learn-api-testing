@@ -3,7 +3,8 @@ package com.devsha256.postman.service;
 import com.devsha256.postman.model.PostmanCollection;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.SerializationFeature;
-import lombok.extern.slf4j.Slf4j;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -21,8 +22,9 @@ import java.util.stream.Stream;
  * Provides functionality to split and merge collections
  */
 @Service
-@Slf4j
 public class PostmanCollectionService {
+
+    private static final Logger log = LoggerFactory.getLogger(PostmanCollectionService.class);
 
     private final ObjectMapper objectMapper;
 
@@ -33,6 +35,7 @@ public class PostmanCollectionService {
 
     /**
      * Feature 1: Split a single collection into individual collections per request
+     * Collection name is based on the request name (normalized for file system)
      *
      * @param sourceFilePath Path to the source Postman collection JSON file
      * @param outputDir Directory where individual collections will be created
@@ -62,7 +65,10 @@ public class PostmanCollectionService {
         int count = 0;
         for (PostmanCollection.Item item : allItems) {
             if (item.getRequest() != null) { // Only process actual requests, not folders
-                PostmanCollection newCollection = createCollectionFromItem(item, sourceCollection);
+                // REQUIREMENT 1: Collection name is based on request name
+                PostmanCollection newCollection = createCollectionFromItem(item, sourceCollection, item.getName());
+
+                // Normalize filename (already done in sanitizeFileName method)
                 String fileName = sanitizeFileName(item.getName()) + ".json";
                 String outputPath = outputDir + File.separator + fileName;
 
@@ -70,7 +76,7 @@ public class PostmanCollectionService {
                         .writeValue(new File(outputPath), newCollection);
 
                 count++;
-                log.info("Created collection {}/{}: {}", count, allItems.size(), fileName);
+                log.info("Created collection {}/{}: {} -> {}", count, allItems.size(), item.getName(), fileName);
             }
         }
 
@@ -79,6 +85,8 @@ public class PostmanCollectionService {
 
     /**
      * Feature 2: Merge multiple collections from a folder into one
+     * Collection name is taken from the output file name (without .json extension)
+     * No folders - all requests are flattened into a single level
      *
      * @param sourceFolderPath Path to folder containing multiple Postman collections
      * @param outputFilePath Path where the merged collection will be saved
@@ -93,12 +101,15 @@ public class PostmanCollectionService {
             throw new IOException("Source folder not found or is not a directory: " + sourceFolderPath);
         }
 
+        // REQUIREMENT 2: Extract collection name from output file (without .json extension)
+        String collectionName = extractCollectionNameFromFilePath(outputFilePath);
+
         // Create merged collection
         PostmanCollection mergedCollection = new PostmanCollection();
         PostmanCollection.Info info = new PostmanCollection.Info();
         info.setPostmanId(UUID.randomUUID().toString());
-        info.setName("Merged Collection - " + sourceFolder.getName());
-        info.setDescription("Combined collection from multiple sources in folder: " + sourceFolderPath);
+        info.setName(collectionName);  // Use name from file path
+        info.setDescription("Merged collection containing all requests from: " + sourceFolderPath);
         info.setSchema("https://schema.getpostman.com/json/collection/v2.1.0/collection.json");
         mergedCollection.setInfo(info);
         mergedCollection.setItem(new ArrayList<>());
@@ -123,20 +134,24 @@ public class PostmanCollectionService {
                 try {
                     PostmanCollection collection = objectMapper.readValue(jsonFile.toFile(), PostmanCollection.class);
 
-                    // Create a folder for this collection's items
-                    PostmanCollection.Item folder = new PostmanCollection.Item();
-                    folder.setName(collection.getInfo().getName());
-                    folder.setDescription(collection.getInfo().getDescription());
-                    folder.setItem(new ArrayList<>(collection.getItem()));
+                    // REQUIREMENT 2: No folders - flatten all requests to single level
+                    List<PostmanCollection.Item> allRequests = extractAllItems(collection.getItem());
 
-                    mergedCollection.getItem().add(folder);
+                    // Add all requests directly to merged collection (no folder structure)
+                    for (PostmanCollection.Item request : allRequests) {
+                        if (request.getRequest() != null) {
+                            mergedCollection.getItem().add(request);
+                        }
+                    }
 
                     // Merge variables (avoiding duplicates)
                     mergeVariables(mergedCollection, collection);
 
                     successCount++;
-                    log.info("Merged collection {}/{}: {}", successCount, jsonFiles.size(),
-                            collection.getInfo().getName());
+                    log.info("Merged collection {}/{}: {} ({} requests)",
+                            successCount, jsonFiles.size(),
+                            collection.getInfo().getName(),
+                            allRequests.size());
                 } catch (Exception e) {
                     log.error("Failed to process file: {}. Error: {}", jsonFile.getFileName(), e.getMessage());
                 }
@@ -157,7 +172,31 @@ public class PostmanCollectionService {
         objectMapper.writerWithDefaultPrettyPrinter()
                 .writeValue(outputFile, mergedCollection);
 
-        log.info("Successfully merged collections into: {}", outputFilePath);
+        log.info("Successfully merged {} requests into collection '{}': {}",
+                mergedCollection.getItem().size(), collectionName, outputFilePath);
+    }
+
+    /**
+     * Extract collection name from output file path (without .json extension)
+     *
+     * @param filePath Output file path
+     * @return Collection name without extension
+     */
+    private String extractCollectionNameFromFilePath(String filePath) {
+        File file = new File(filePath);
+        String fileName = file.getName();
+
+        // Remove .json extension if present
+        if (fileName.toLowerCase().endsWith(".json")) {
+            fileName = fileName.substring(0, fileName.length() - 5);
+        }
+
+        // If empty after removing extension, use default
+        if (fileName.trim().isEmpty()) {
+            return "Merged Collection";
+        }
+
+        return fileName;
     }
 
     /**
@@ -188,19 +227,22 @@ public class PostmanCollectionService {
 
     /**
      * Create a new collection containing a single request item
+     * Collection name is set to the provided name (usually the request name)
      *
      * @param item The request item to create a collection from
      * @param sourceCollection The original collection (for metadata)
+     * @param collectionName The name for the new collection
      * @return New collection with single request
      */
     private PostmanCollection createCollectionFromItem(PostmanCollection.Item item,
-                                                       PostmanCollection sourceCollection) {
+                                                       PostmanCollection sourceCollection,
+                                                       String collectionName) {
         PostmanCollection newCollection = new PostmanCollection();
 
-        // Copy info with new ID and name
+        // Copy info with new ID and name based on request name
         PostmanCollection.Info info = new PostmanCollection.Info();
         info.setPostmanId(UUID.randomUUID().toString());
-        info.setName(item.getName());
+        info.setName(collectionName);  // Use the provided collection name
         info.setDescription(item.getDescription());
         info.setSchema(sourceCollection.getInfo().getSchema());
         newCollection.setInfo(info);
@@ -240,6 +282,7 @@ public class PostmanCollectionService {
 
     /**
      * Sanitize filename by removing invalid characters
+     * Normalizes the name to be file-system safe
      *
      * @param name Original filename
      * @return Sanitized filename safe for file systems
@@ -248,8 +291,27 @@ public class PostmanCollectionService {
         if (name == null || name.trim().isEmpty()) {
             return "unnamed_request";
         }
-        return name.replaceAll("[^a-zA-Z0-9.\\-_ ]", "_")
-                .replaceAll("\\s+", "_")
-                .trim();
+
+        // Replace invalid filename characters with underscore
+        // Invalid chars: < > : " / \ | ? *
+        String sanitized = name.replaceAll("[<>:\"/\\\\|?*]", "_");
+
+        // Replace multiple spaces with single underscore
+        sanitized = sanitized.replaceAll("\\s+", "_");
+
+        // Remove leading/trailing underscores and spaces
+        sanitized = sanitized.replaceAll("^[_\\s]+|[_\\s]+$", "");
+
+        // If empty after sanitization, use default
+        if (sanitized.isEmpty()) {
+            return "unnamed_request";
+        }
+
+        // Limit length to 200 characters (leave room for .json extension)
+        if (sanitized.length() > 200) {
+            sanitized = sanitized.substring(0, 200);
+        }
+
+        return sanitized;
     }
 }
