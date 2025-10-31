@@ -1,7 +1,7 @@
 # Read Me First
 The following was discovered as part of building this project:
 
-* The original package name 'com.devsha256.postman-manager' is invalid and this project uses 'com.devsha256.postman_manager' instead.
+* The original package name 'com.devsha256.postman-manager' is invalid and this project uses 'com.devsha256.postman' instead.
 
 # Getting Started
 

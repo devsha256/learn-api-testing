@@ -1,4 +1,4 @@
-package com.devsha256.postman_manager;
+package com.devsha256.postman;
 
 import org.junit.jupiter.api.Test;
 import org.springframework.boot.test.context.SpringBootTest;

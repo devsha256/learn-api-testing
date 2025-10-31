@@ -1,0 +1,17 @@
+# Application Configuration
+spring:
+  application:
+    name: postman-manager
+
+  # Disable web server as this is a CLI application
+  main:
+    web-application-type: none
+    banner-mode: off
+
+# Logging Configuration
+logging:
+  level:
+    root: INFO
+    com.devsha256.postman: INFO
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} %-5level %logger{36} - %msg%n"
