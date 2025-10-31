@@ -15,7 +15,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
@@ -29,9 +28,8 @@ public class PostmanCollectionService {
 
     private final ObjectMapper objectMapper;
 
-    // Known environment patterns for Mule and Boomi
-    private static final List<String> MULE_ENVIRONMENTS = Arrays.asList("-dev", "-qa", "-uat", "-prod");
-    private static final String BOOMI_PATTERN = "boomi";
+    // Resource pattern to extract - everything from /ws/rest/ onwards
+    private static final String RESOURCE_PATTERN = "/ws/rest/";
 
     public PostmanCollectionService() {
         this.objectMapper = new ObjectMapper();
@@ -90,6 +88,11 @@ public class PostmanCollectionService {
             count++;
             log.info("Created collection {}/{}: {} ({} requests)",
                     count, groupedRequests.size(), groupKey, requests.size());
+
+            // Log all requests in this group
+            for (PostmanCollection.Item req : requests) {
+                log.debug("  - {}", req.getName());
+            }
         }
 
         log.info("Successfully created {} grouped collections in: {}", count, outputDir);
@@ -192,11 +195,16 @@ public class PostmanCollectionService {
 
     /**
      * Group requests by METHOD + normalized resource path
-     * Requests targeting the same resource across different environments are grouped together
      *
-     * Example:
-     *   GET https://mule-dev.com/test-app-dev/ws/rest/GetCustomer
-     *   GET https://mule-qa.com/test-app-qa/ws/rest/GetCustomer
+     * Grouping Logic:
+     * 1. Extract HTTP method (GET, POST, PUT, DELETE, etc.)
+     * 2. Extract URL and remove everything up to /ws/rest/
+     * 3. Remove query parameters
+     * 4. Group key = METHOD + resource path
+     *
+     * Examples:
+     *   GET https://mule-dev.com/test-app-dev/ws/rest/GetCustomer?id=123
+     *   GET https://mule-qa.com/test-app-qa/ws/rest/GetCustomer?id=456
      *   GET https://boomi-pp.com/ws/rest/GetCustomer
      *
      * All grouped as: "GET /ws/rest/GetCustomer"
@@ -210,15 +218,19 @@ public class PostmanCollectionService {
             }
 
             try {
-                // Extract method and normalized resource
+                // Extract method
                 String method = extractMethod(item);
+
+                // Extract normalized resource (everything from /ws/rest/ onwards, without query params)
                 String normalizedResource = extractNormalizedResource(item);
 
-                // Create group key: "METHOD /resource/path"
+                // Create group key: "METHOD /ws/rest/ResourceName"
                 String groupKey = method + " " + normalizedResource;
 
                 // Add to group
                 grouped.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(item);
+
+                log.debug("Grouped '{}' -> '{}'", item.getName(), groupKey);
 
             } catch (Exception e) {
                 log.warn("Could not process request '{}': {}", item.getName(), e.getMessage());
@@ -248,14 +260,20 @@ public class PostmanCollectionService {
 
     /**
      * Extract and normalize resource path from request URL
-     * Removes environment-specific parts (host, app name) to get the core resource path
+     *
+     * Logic:
+     * 1. Get the URL string
+     * 2. Find /ws/rest/ in the URL
+     * 3. Extract everything from /ws/rest/ onwards
+     * 4. Remove query parameters (everything after ?)
      *
      * Examples:
-     *   https://mule-dev.com/test-app-dev/ws/rest/GetCustomer -> /ws/rest/GetCustomer
+     *   https://mule-dev.com/test-app-dev/ws/rest/GetCustomer?id=123 -> /ws/rest/GetCustomer
      *   https://mule-qa.com/test-app-qa/ws/rest/GetCustomer -> /ws/rest/GetCustomer
      *   https://boomi-pp.com/ws/rest/GetCustomer -> /ws/rest/GetCustomer
+     *   https://mule-dev.com/app-dev/ws/rest/CreateOrder?type=new -> /ws/rest/CreateOrder
      */
-    private String extractNormalizedResource(PostmanCollection.Item item) throws URISyntaxException {
+    private String extractNormalizedResource(PostmanCollection.Item item) {
         try {
             Map<String, Object> request = (Map<String, Object>) item.getRequest();
             Object urlObj = request.get("url");
@@ -263,26 +281,67 @@ public class PostmanCollectionService {
             String urlString = extractUrlString(urlObj);
 
             if (urlString == null || urlString.isEmpty()) {
+                log.warn("Empty URL for request: {}", item.getName());
                 return "/" + sanitizeFileName(item.getName());
             }
 
-            // Parse URL
+            log.debug("Processing URL: {}", urlString);
+
+            // Find the position of /ws/rest/
+            int resourceStartIndex = urlString.indexOf(RESOURCE_PATTERN);
+
+            if (resourceStartIndex == -1) {
+                log.warn("URL does not contain '{}': {}", RESOURCE_PATTERN, urlString);
+                // Fallback: try to extract path from URI
+                return extractPathFallback(urlString, item.getName());
+            }
+
+            // Extract everything from /ws/rest/ onwards
+            String resourcePath = urlString.substring(resourceStartIndex);
+
+            // Remove query parameters (everything after ?)
+            int queryIndex = resourcePath.indexOf('?');
+            if (queryIndex != -1) {
+                resourcePath = resourcePath.substring(0, queryIndex);
+            }
+
+            // Remove fragment (everything after #)
+            int fragmentIndex = resourcePath.indexOf('#');
+            if (fragmentIndex != -1) {
+                resourcePath = resourcePath.substring(0, fragmentIndex);
+            }
+
+            log.debug("Normalized resource: {}", resourcePath);
+
+            return resourcePath;
+
+        } catch (Exception e) {
+            log.error("Error extracting resource from request '{}': {}", item.getName(), e.getMessage());
+            return "/" + sanitizeFileName(item.getName());
+        }
+    }
+
+    /**
+     * Fallback method to extract path when /ws/rest/ pattern is not found
+     */
+    private String extractPathFallback(String urlString, String itemName) {
+        try {
             URI uri = new URI(urlString);
             String path = uri.getPath();
 
-            if (path == null || path.isEmpty()) {
-                return "/" + sanitizeFileName(item.getName());
+            if (path != null && !path.isEmpty()) {
+                // Remove query params from path if any
+                int queryIndex = path.indexOf('?');
+                if (queryIndex != -1) {
+                    path = path.substring(0, queryIndex);
+                }
+                return path;
             }
-
-            // Remove Mule app name pattern (e.g., /test-app-dev/, /test-app-qa/)
-            path = removeMuleAppName(path);
-
-            return path;
-
-        } catch (Exception e) {
-            log.debug("Could not extract resource from request '{}': {}", item.getName(), e.getMessage());
-            return "/" + sanitizeFileName(item.getName());
+        } catch (URISyntaxException e) {
+            log.debug("Failed to parse URI: {}", e.getMessage());
         }
+
+        return "/" + sanitizeFileName(itemName);
     }
 
     /**
@@ -306,43 +365,15 @@ public class PostmanCollectionService {
             if (raw != null) {
                 return raw.toString();
             }
-        }
 
-        return urlObj.toString();
-    }
-
-    /**
-     * Remove Mule app name from path
-     * Pattern: /app-name-env/rest/of/path -> /rest/of/path
-     *
-     * Examples:
-     *   /test-app-dev/ws/rest/GetCustomer -> /ws/rest/GetCustomer
-     *   /test-app-qa/ws/rest/GetCustomer -> /ws/rest/GetCustomer
-     */
-    private String removeMuleAppName(String path) {
-        if (path == null || path.isEmpty()) {
-            return path;
-        }
-
-        // Split path into segments
-        String[] segments = path.split("/");
-
-        if (segments.length < 2) {
-            return path;
-        }
-
-        // Check if first segment (after leading /) looks like a Mule app name
-        // Pattern: app-name-env (contains environment suffix)
-        String firstSegment = segments[1];
-
-        for (String env : MULE_ENVIRONMENTS) {
-            if (firstSegment.endsWith(env)) {
-                // Remove first segment and reconstruct path
-                return "/" + String.join("/", Arrays.copyOfRange(segments, 2, segments.length));
+            // Try 'href' field as fallback
+            Object href = urlMap.get("href");
+            if (href != null) {
+                return href.toString();
             }
         }
 
-        return path;
+        return urlObj.toString();
     }
 
     /**
@@ -366,7 +397,11 @@ public class PostmanCollectionService {
         newCollection.setItem(new ArrayList<>(requests));
 
         // Copy variables and auth from source
-        newCollection.setVariable(new ArrayList<>(sourceCollection.getVariable()));
+        if (sourceCollection.getVariable() != null) {
+            newCollection.setVariable(new ArrayList<>(sourceCollection.getVariable()));
+        } else {
+            newCollection.setVariable(new ArrayList<>());
+        }
         newCollection.setAuth(sourceCollection.getAuth());
 
         return newCollection;
@@ -400,7 +435,7 @@ public class PostmanCollectionService {
             // Create folder
             PostmanCollection.Item folder = new PostmanCollection.Item();
             folder.setName(groupKey);
-            folder.setDescription("Requests for " + groupKey + " across environments");
+            folder.setDescription("Requests for " + groupKey + " across environments (" + requests.size() + " variants)");
             folder.setItem(new ArrayList<>(requests));
 
             folders.add(folder);
@@ -472,23 +507,5 @@ public class PostmanCollectionService {
         }
 
         return sanitized;
-    }
-
-    /**
-     * Merge variables from source to target, avoiding duplicates
-     */
-    private void mergeVariables(PostmanCollection target, PostmanCollection source) {
-        if (source.getVariable() == null || source.getVariable().isEmpty()) {
-            return;
-        }
-
-        for (PostmanCollection.Variable sourceVar : source.getVariable()) {
-            boolean exists = target.getVariable().stream()
-                    .anyMatch(v -> v.getKey().equals(sourceVar.getKey()));
-
-            if (!exists) {
-                target.getVariable().add(sourceVar);
-            }
-        }
     }
 }
