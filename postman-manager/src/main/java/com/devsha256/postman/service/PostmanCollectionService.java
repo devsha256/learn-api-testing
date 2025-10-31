@@ -28,8 +28,9 @@ public class PostmanCollectionService {
 
     private final ObjectMapper objectMapper;
 
-    // Resource pattern to extract - everything from /ws/rest/ onwards
-    private static final String RESOURCE_PATTERN = "/ws/rest/";
+    // Resource patterns to extract - everything from these patterns onwards
+    private static final String REST_PATTERN = "/ws/rest";
+    private static final String SOAP_PATTERN = "/ws/soap";
 
     public PostmanCollectionService() {
         this.objectMapper = new ObjectMapper();
@@ -99,8 +100,14 @@ public class PostmanCollectionService {
     }
 
     /**
-     * Feature 2: Merge collections by grouping requests with same method+resource into folders
-     * Each unique resource becomes a folder containing all environment variants
+     * Feature 2: Merge collections by grouping requests with same resource into folders
+     *
+     * Logic:
+     * 1. Extract URL from each request
+     * 2. Replace everything up to /ws/rest or /ws/soap
+     * 3. Remaining path is the resource group
+     * 4. Create a folder for each resource group
+     * 5. Name of each request = resource host (from original URL)
      *
      * @param sourceFolderPath Path to folder containing multiple Postman collections
      * @param outputFilePath Path where the merged collection will be saved
@@ -170,10 +177,10 @@ public class PostmanCollectionService {
             }
         }
 
-        // Group requests by method + resource
-        Map<String, List<PostmanCollection.Item>> groupedRequests = groupRequestsByResource(allRequests);
+        // Group requests by resource group and rename them by host
+        Map<String, List<PostmanCollection.Item>> groupedRequests = groupAndRenameRequestsForMerge(allRequests);
 
-        log.info("Grouped {} requests into {} unique resources", allRequests.size(), groupedRequests.size());
+        log.info("Grouped {} requests into {} resource folders", allRequests.size(), groupedRequests.size());
 
         // Create merged collection with folders
         PostmanCollection mergedCollection = createMergedCollectionWithFolders(
@@ -194,20 +201,176 @@ public class PostmanCollectionService {
     }
 
     /**
-     * Group requests by METHOD + normalized resource path
+     * Group requests by resource group for MERGE operation
+     * AND rename each request to its host
+     *
+     * Logic:
+     * 1. Extract URL
+     * 2. Find /ws/rest or /ws/soap
+     * 3. Extract resource group (everything after the pattern)
+     * 4. Extract host from URL
+     * 5. Rename request to host
+     * 6. Group by resource
+     *
+     * Example:
+     *   URL: https://mule-dev.com/test-app-dev/ws/rest/GetCustomer
+     *   Resource Group: /GetCustomer
+     *   Host: mule-dev.com
+     *   Request renamed to: "mule-dev.com"
+     */
+    private Map<String, List<PostmanCollection.Item>> groupAndRenameRequestsForMerge(List<PostmanCollection.Item> items) {
+        Map<String, List<PostmanCollection.Item>> grouped = new LinkedHashMap<>();
+
+        for (PostmanCollection.Item item : items) {
+            if (item.getRequest() == null) {
+                continue;
+            }
+
+            try {
+                // Extract URL
+                String urlString = extractUrlFromRequest(item);
+
+                if (urlString == null || urlString.isEmpty()) {
+                    log.warn("Empty URL for request: {}", item.getName());
+                    continue;
+                }
+
+                // Extract resource group (everything after /ws/rest or /ws/soap, without query params)
+                String resourceGroup = extractResourceGroup(urlString);
+
+                // Extract host from URL
+                String host = extractHost(urlString);
+
+                // Rename the request to the host
+                item.setName(host);
+
+                // Add to group
+                grouped.computeIfAbsent(resourceGroup, k -> new ArrayList<>()).add(item);
+
+                log.debug("Grouped '{}' -> Resource: '{}', Renamed to: '{}'",
+                        urlString, resourceGroup, host);
+
+            } catch (Exception e) {
+                log.warn("Could not process request '{}': {}", item.getName(), e.getMessage());
+            }
+        }
+
+        return grouped;
+    }
+
+    /**
+     * Extract URL string from request item
+     */
+    private String extractUrlFromRequest(PostmanCollection.Item item) {
+        try {
+            Map<String, Object> request = (Map<String, Object>) item.getRequest();
+            Object urlObj = request.get("url");
+            return extractUrlString(urlObj);
+        } catch (Exception e) {
+            log.debug("Could not extract URL from request: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Extract resource group from URL
+     *
+     * Logic:
+     * 1. Find /ws/rest or /ws/soap in the URL
+     * 2. Extract everything after it
+     * 3. Remove query parameters
+     *
+     * Examples:
+     *   https://mule-dev.com/test-app-dev/ws/rest/GetCustomer?id=123 -> /GetCustomer
+     *   https://boomi-pp.com/ws/soap/CreateOrder -> /CreateOrder
+     *   https://mule-qa.com/app-qa/ws/rest/UpdateUser?name=test -> /UpdateUser
+     */
+    private String extractResourceGroup(String urlString) {
+        // Try REST pattern first
+        int restIndex = urlString.indexOf(REST_PATTERN);
+        if (restIndex != -1) {
+            String resource = urlString.substring(restIndex + REST_PATTERN.length());
+            return removeQueryParams(resource);
+        }
+
+        // Try SOAP pattern
+        int soapIndex = urlString.indexOf(SOAP_PATTERN);
+        if (soapIndex != -1) {
+            String resource = urlString.substring(soapIndex + SOAP_PATTERN.length());
+            return removeQueryParams(resource);
+        }
+
+        // Fallback: use the entire path
+        try {
+            URI uri = new URI(urlString);
+            String path = uri.getPath();
+            return removeQueryParams(path != null ? path : "/unknown");
+        } catch (URISyntaxException e) {
+            log.warn("Could not parse URI: {}", urlString);
+            return "/unknown";
+        }
+    }
+
+    /**
+     * Extract host from URL
+     *
+     * Examples:
+     *   https://mule-dev.com/test-app-dev/ws/rest/GetCustomer -> mule-dev.com
+     *   https://mule-qa.com:8080/app/ws/rest/GetUser -> mule-qa.com:8080
+     *   https://boomi-pp.com/ws/soap/CreateOrder -> boomi-pp.com
+     */
+    private String extractHost(String urlString) {
+        try {
+            URI uri = new URI(urlString);
+            String host = uri.getHost();
+            int port = uri.getPort();
+
+            if (host == null) {
+                return "unknown-host";
+            }
+
+            // Include port if it's not the default (80 for HTTP, 443 for HTTPS)
+            if (port != -1 && port != 80 && port != 443) {
+                return host + ":" + port;
+            }
+
+            return host;
+        } catch (URISyntaxException e) {
+            log.warn("Could not extract host from URL: {}", urlString);
+            return "unknown-host";
+        }
+    }
+
+    /**
+     * Remove query parameters from a string
+     */
+    private String removeQueryParams(String str) {
+        if (str == null) {
+            return "";
+        }
+
+        int queryIndex = str.indexOf('?');
+        if (queryIndex != -1) {
+            str = str.substring(0, queryIndex);
+        }
+
+        int fragmentIndex = str.indexOf('#');
+        if (fragmentIndex != -1) {
+            str = str.substring(0, fragmentIndex);
+        }
+
+        return str;
+    }
+
+    /**
+     * Group requests by METHOD + normalized resource path for SPLIT operation
      *
      * Grouping Logic:
      * 1. Extract HTTP method (GET, POST, PUT, DELETE, etc.)
-     * 2. Extract URL and remove everything up to /ws/rest/
-     * 3. Remove query parameters
-     * 4. Group key = METHOD + resource path
-     *
-     * Examples:
-     *   GET https://mule-dev.com/test-app-dev/ws/rest/GetCustomer?id=123
-     *   GET https://mule-qa.com/test-app-qa/ws/rest/GetCustomer?id=456
-     *   GET https://boomi-pp.com/ws/rest/GetCustomer
-     *
-     * All grouped as: "GET /ws/rest/GetCustomer"
+     * 2. Extract URL and find /ws/rest or /ws/soap
+     * 3. Extract everything from that pattern onwards
+     * 4. Remove query parameters
+     * 5. Group key = METHOD + resource path
      */
     private Map<String, List<PostmanCollection.Item>> groupRequestsByResource(List<PostmanCollection.Item> items) {
         Map<String, List<PostmanCollection.Item>> grouped = new LinkedHashMap<>();
@@ -221,8 +384,16 @@ public class PostmanCollectionService {
                 // Extract method
                 String method = extractMethod(item);
 
-                // Extract normalized resource (everything from /ws/rest/ onwards, without query params)
-                String normalizedResource = extractNormalizedResource(item);
+                // Extract URL
+                String urlString = extractUrlFromRequest(item);
+
+                if (urlString == null || urlString.isEmpty()) {
+                    log.warn("Empty URL for request: {}", item.getName());
+                    continue;
+                }
+
+                // Extract normalized resource
+                String normalizedResource = extractNormalizedResourceForSplit(urlString);
 
                 // Create group key: "METHOD /ws/rest/ResourceName"
                 String groupKey = method + " " + normalizedResource;
@@ -238,6 +409,35 @@ public class PostmanCollectionService {
         }
 
         return grouped;
+    }
+
+    /**
+     * Extract normalized resource for SPLIT operation
+     * Includes the /ws/rest or /ws/soap pattern in the result
+     */
+    private String extractNormalizedResourceForSplit(String urlString) {
+        // Try REST pattern
+        int restIndex = urlString.indexOf(REST_PATTERN);
+        if (restIndex != -1) {
+            String resource = urlString.substring(restIndex);
+            return removeQueryParams(resource);
+        }
+
+        // Try SOAP pattern
+        int soapIndex = urlString.indexOf(SOAP_PATTERN);
+        if (soapIndex != -1) {
+            String resource = urlString.substring(soapIndex);
+            return removeQueryParams(resource);
+        }
+
+        // Fallback
+        try {
+            URI uri = new URI(urlString);
+            String path = uri.getPath();
+            return removeQueryParams(path != null ? path : "/unknown");
+        } catch (URISyntaxException e) {
+            return "/unknown";
+        }
     }
 
     /**
@@ -259,106 +459,17 @@ public class PostmanCollectionService {
     }
 
     /**
-     * Extract and normalize resource path from request URL
-     *
-     * Logic:
-     * 1. Get the URL string
-     * 2. Find /ws/rest/ in the URL
-     * 3. Extract everything from /ws/rest/ onwards
-     * 4. Remove query parameters (everything after ?)
-     *
-     * Examples:
-     *   https://mule-dev.com/test-app-dev/ws/rest/GetCustomer?id=123 -> /ws/rest/GetCustomer
-     *   https://mule-qa.com/test-app-qa/ws/rest/GetCustomer -> /ws/rest/GetCustomer
-     *   https://boomi-pp.com/ws/rest/GetCustomer -> /ws/rest/GetCustomer
-     *   https://mule-dev.com/app-dev/ws/rest/CreateOrder?type=new -> /ws/rest/CreateOrder
-     */
-    private String extractNormalizedResource(PostmanCollection.Item item) {
-        try {
-            Map<String, Object> request = (Map<String, Object>) item.getRequest();
-            Object urlObj = request.get("url");
-
-            String urlString = extractUrlString(urlObj);
-
-            if (urlString == null || urlString.isEmpty()) {
-                log.warn("Empty URL for request: {}", item.getName());
-                return "/" + sanitizeFileName(item.getName());
-            }
-
-            log.debug("Processing URL: {}", urlString);
-
-            // Find the position of /ws/rest/
-            int resourceStartIndex = urlString.indexOf(RESOURCE_PATTERN);
-
-            if (resourceStartIndex == -1) {
-                log.warn("URL does not contain '{}': {}", RESOURCE_PATTERN, urlString);
-                // Fallback: try to extract path from URI
-                return extractPathFallback(urlString, item.getName());
-            }
-
-            // Extract everything from /ws/rest/ onwards
-            String resourcePath = urlString.substring(resourceStartIndex);
-
-            // Remove query parameters (everything after ?)
-            int queryIndex = resourcePath.indexOf('?');
-            if (queryIndex != -1) {
-                resourcePath = resourcePath.substring(0, queryIndex);
-            }
-
-            // Remove fragment (everything after #)
-            int fragmentIndex = resourcePath.indexOf('#');
-            if (fragmentIndex != -1) {
-                resourcePath = resourcePath.substring(0, fragmentIndex);
-            }
-
-            log.debug("Normalized resource: {}", resourcePath);
-
-            return resourcePath;
-
-        } catch (Exception e) {
-            log.error("Error extracting resource from request '{}': {}", item.getName(), e.getMessage());
-            return "/" + sanitizeFileName(item.getName());
-        }
-    }
-
-    /**
-     * Fallback method to extract path when /ws/rest/ pattern is not found
-     */
-    private String extractPathFallback(String urlString, String itemName) {
-        try {
-            URI uri = new URI(urlString);
-            String path = uri.getPath();
-
-            if (path != null && !path.isEmpty()) {
-                // Remove query params from path if any
-                int queryIndex = path.indexOf('?');
-                if (queryIndex != -1) {
-                    path = path.substring(0, queryIndex);
-                }
-                return path;
-            }
-        } catch (URISyntaxException e) {
-            log.debug("Failed to parse URI: {}", e.getMessage());
-        }
-
-        return "/" + sanitizeFileName(itemName);
-    }
-
-    /**
      * Extract URL string from various Postman URL formats
-     * Handles both string URLs and complex URL objects
      */
     private String extractUrlString(Object urlObj) {
         if (urlObj == null) {
             return null;
         }
 
-        // If URL is a simple string
         if (urlObj instanceof String) {
             return (String) urlObj;
         }
 
-        // If URL is an object with 'raw' field
         if (urlObj instanceof Map) {
             Map<String, Object> urlMap = (Map<String, Object>) urlObj;
             Object raw = urlMap.get("raw");
@@ -366,7 +477,6 @@ public class PostmanCollectionService {
                 return raw.toString();
             }
 
-            // Try 'href' field as fallback
             Object href = urlMap.get("href");
             if (href != null) {
                 return href.toString();
@@ -385,7 +495,6 @@ public class PostmanCollectionService {
                                                       String groupKey) {
         PostmanCollection newCollection = new PostmanCollection();
 
-        // Create info
         PostmanCollection.Info info = new PostmanCollection.Info();
         info.setPostmanId(UUID.randomUUID().toString());
         info.setName(groupKey);
@@ -393,10 +502,8 @@ public class PostmanCollectionService {
         info.setSchema(sourceCollection.getInfo().getSchema());
         newCollection.setInfo(info);
 
-        // Add all requests from this group
         newCollection.setItem(new ArrayList<>(requests));
 
-        // Copy variables and auth from source
         if (sourceCollection.getVariable() != null) {
             newCollection.setVariable(new ArrayList<>(sourceCollection.getVariable()));
         } else {
@@ -408,16 +515,15 @@ public class PostmanCollectionService {
     }
 
     /**
-     * Create merged collection with folder structure
-     * Each unique method+resource becomes a folder containing all environment variants
-     * Used for MERGE operation
+     * Create merged collection with folder structure for MERGE operation
+     * Each resource group becomes a folder
+     * Each request inside is named by its host
      */
     private PostmanCollection createMergedCollectionWithFolders(String collectionName,
                                                                 Map<String, List<PostmanCollection.Item>> groupedRequests,
                                                                 List<PostmanCollection.Variable> variables) {
         PostmanCollection mergedCollection = new PostmanCollection();
 
-        // Create info
         PostmanCollection.Info info = new PostmanCollection.Info();
         info.setPostmanId(UUID.randomUUID().toString());
         info.setName(collectionName);
@@ -425,20 +531,24 @@ public class PostmanCollectionService {
         info.setSchema("https://schema.getpostman.com/json/collection/v2.1.0/collection.json");
         mergedCollection.setInfo(info);
 
-        // Create folders for each group
         List<PostmanCollection.Item> folders = new ArrayList<>();
 
         for (Map.Entry<String, List<PostmanCollection.Item>> entry : groupedRequests.entrySet()) {
-            String groupKey = entry.getKey();
+            String resourceGroup = entry.getKey();
             List<PostmanCollection.Item> requests = entry.getValue();
 
-            // Create folder
+            // Create folder named by resource group
             PostmanCollection.Item folder = new PostmanCollection.Item();
-            folder.setName(groupKey);
-            folder.setDescription("Requests for " + groupKey + " across environments (" + requests.size() + " variants)");
+            folder.setName(resourceGroup);
+            folder.setDescription("Resource: " + resourceGroup + " (" + requests.size() + " environments)");
             folder.setItem(new ArrayList<>(requests));
 
             folders.add(folder);
+
+            log.debug("Created folder '{}' with {} requests", resourceGroup, requests.size());
+            for (PostmanCollection.Item req : requests) {
+                log.debug("  - {}", req.getName());
+            }
         }
 
         mergedCollection.setItem(folders);
@@ -448,7 +558,7 @@ public class PostmanCollectionService {
     }
 
     /**
-     * Extract collection name from output file path (without .json extension)
+     * Extract collection name from output file path
      */
     private String extractCollectionNameFromFilePath(String filePath) {
         File file = new File(filePath);
