@@ -248,19 +248,27 @@ const buildBoomiRequest = (boomiUrl, method, headers, requestBody, bodyMode) => 
 };
 
 // ========================================================================
-// cURL Command Generation
+// cURL Command Generation - CORRECTED ESCAPING
 // ========================================================================
+const escapeForCurl = (str) => {
+    // For cURL shell commands, single quotes need special handling
+    // Replace ' with '\'' (end quote, escaped quote, start quote)
+    return String(str).replace(/'/g, "'\\''");
+};
+
+const escapeBody = (body) => {
+    // Body needs both backslash and single quote escaping
+    return String(body).replace(/\\/g, '\\\\').replace(/'/g, "'\\''");
+};
+
 const buildCurlBase = (requestUrl, method) => {
-    // CRITICAL FIX: Escape the URL before inserting it
     const escapedUrl = escapeForCurl(requestUrl);
     let curlCommand = `curl --location '${escapedUrl}'`;
-    
     if (method !== 'GET') {
         curlCommand += ` \\\n--request ${method}`;
     }
     return curlCommand;
 };
-
 
 const addCurlHeaders = (curlCommand, headers) => {
     if (!headers || typeof headers !== 'object') return curlCommand;
@@ -275,16 +283,13 @@ const addCurlHeaders = (curlCommand, headers) => {
     return curlCommand;
 };
 
-
 const addCurlBody = (curlCommand, requestBody, bodyMode) => {
     if (!requestBody || requestBody.trim() === '') return curlCommand;
     
     const escapedBody = escapeBody(requestBody);
-    curlCommand += ` \\\n--data-raw '${escapedBody}'`;  // Use --data-raw
-    
+    curlCommand += ` \\\n--data-raw '${escapedBody}'`;
     return curlCommand;
 };
-
 
 const generateCurlCommand = (requestUrl, method, headers, requestBody, bodyMode) => {
     let curlCommand = buildCurlBase(requestUrl, method);
@@ -292,6 +297,7 @@ const generateCurlCommand = (requestUrl, method, headers, requestBody, bodyMode)
     curlCommand = addCurlBody(curlCommand, requestBody, bodyMode);
     return curlCommand;
 };
+
 
 // ========================================================================
 // Response Handling

@@ -1,5 +1,5 @@
 // ========================================================================
-// Utility Functions
+// Utility Functions - CORRECTED CSV ESCAPING
 // ========================================================================
 const getReportCount = () => 
     parseInt(pm.collectionVariables.get("report_request_count") || "0");
@@ -12,13 +12,18 @@ const getReportData = (index) => {
 const setCollectionVar = (key, value) => 
     pm.collectionVariables.set(key, value);
 
+// CRITICAL: Proper CSV escaping
+// RFC 4180 compliant: fields with quotes, commas, or newlines must be quoted
+// Internal quotes must be doubled
 const escapeCSV = (text) => {
     if (!text && text !== 0) return '';
+    
     const str = String(text);
-    if (str.includes('"') || str.includes(',') || str.includes('\n') || str.includes('\r')) {
-        return `"${str.replace(/"/g, '""')}"`;
-    }
-    return str;
+    
+    // Always wrap in double quotes and double any internal double quotes
+    // This handles ALL special characters including single quotes
+    const escaped = str.replace(/"/g, '""');
+    return `"${escaped}"`;
 };
 
 // ========================================================================
@@ -50,7 +55,7 @@ const loadReports = (reportCount) => {
 };
 
 // ========================================================================
-// CSV Generation
+// CSV Generation - ALL fields properly escaped
 // ========================================================================
 const createFullCSVRow = (report) => {
     const stats = report.statistics;
@@ -67,7 +72,7 @@ const createFullCSVRow = (report) => {
         stats.boomiStatus,
         stats.mulesoftStatus,
         escapeCSV(stats.timestamp),
-        escapeCSV(report.curlCommand),
+        escapeCSV(report.curlCommand),      // cURL properly escaped for CSV
         escapeCSV(report.boomiResponse),
         escapeCSV(report.mulesoftResponse)
     ].join(',');

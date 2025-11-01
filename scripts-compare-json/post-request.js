@@ -437,24 +437,29 @@ const logStatistics = (stats) => {
 };
 
 // ========================================================================
-// Minify, Report Storage, and Visualizer
-// ========================================================================
-// ========================================================================
-// Report Storage (with special character handling)
+// Report Storage - CORRECTED MULTI-LAYER ESCAPING
 // ========================================================================
 const minifyResponse = (text) => {
     if (!text) return "";
     
     try {
-        const minified = JSON.stringify(JSON.parse(text.trim()));
-        return minified.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        // Remove all newlines and extra whitespace from XML/JSON
+        const cleaned = text.replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim();
+        // NO escaping here - will be done during CSV generation
+        return cleaned;
     } catch (e) {
-        return text.trim().replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        return text.replace(/\r?\n|\r/g, ' ').replace(/\s+/g, ' ').trim();
     }
 };
 
-const escapeCurlCommand = (curlCommand) => 
-    curlCommand.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+const cleanCurlCommand = (curlCommand) => {
+    // Remove newlines and extra spaces from cURL for storage
+    // DO NOT escape here - the cURL already has shell escaping
+    // CSV escaping will be done during CSV generation
+    return curlCommand.replace(/\\\n/g, ' ')  // Remove line continuations
+                      .replace(/\s+/g, ' ')    // Collapse multiple spaces
+                      .trim();
+};
 
 const createStatsObject = (stats, context) => ({
     totalLines: stats.totalLines,
@@ -472,7 +477,7 @@ const createStatsObject = (stats, context) => ({
 const createReportEntry = (context, stats) => ({
     serialNumber: parseInt(context.reportIndex),
     requestName: context.requestName,
-    curlCommand: escapeCurlCommand(context.curlCommand),
+    curlCommand: cleanCurlCommand(context.curlCommand),  // Clean but don't escape
     boomiResponse: context.skipPayloadLogging 
         ? "[PAYLOAD_SKIPPED]" 
         : minifyResponse(context.boomiResponseRaw),
@@ -486,6 +491,7 @@ const storeReport = (context, stats) => {
     const reportEntry = createReportEntry(context, stats);
     const paddedIndex = context.reportIndex.padStart(3, '0');
     
+    // JSON.stringify will handle the JSON escaping
     pm.collectionVariables.set(`report_data_${paddedIndex}`, JSON.stringify(reportEntry));
     console.log(`Report stored with cURL length: ${context.curlCommand.length}`);
     
