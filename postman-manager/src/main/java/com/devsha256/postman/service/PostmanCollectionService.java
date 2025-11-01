@@ -15,11 +15,14 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.function.Function;
+import java.util.function.Predicate;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Service class for managing Postman collections
- * Provides functionality to split and merge collections with environment grouping
+ * Service class for managing Postman collections using Functional Programming paradigm
+ * Leverages Java Streams, Lambdas, and Functional Interfaces
  */
 @Service
 public class PostmanCollectionService {
@@ -28,9 +31,19 @@ public class PostmanCollectionService {
 
     private final ObjectMapper objectMapper;
 
-    // Resource patterns to extract - everything from these patterns onwards
+    // Resource patterns to extract
     private static final String REST_PATTERN = "/ws/rest";
     private static final String SOAP_PATTERN = "/ws/soap";
+
+    // Predicates for filtering
+    private static final Predicate<PostmanCollection.Item> HAS_REQUEST =
+            item -> item.getRequest() != null;
+
+    private static final Predicate<PostmanCollection.Item> IS_FOLDER =
+            item -> item.getItem() != null && !item.getItem().isEmpty();
+
+    private static final Predicate<Path> IS_JSON_FILE =
+            path -> Files.isRegularFile(path) && path.toString().endsWith(".json");
 
     public PostmanCollectionService() {
         this.objectMapper = new ObjectMapper();
@@ -39,102 +52,59 @@ public class PostmanCollectionService {
 
     /**
      * Feature 1: Split collection by grouping requests with same method+resource across environments
-     * Groups Mule Dev, Mule QA, and Boomi requests that target the same resource
-     *
-     * @param sourceFilePath Path to the source Postman collection JSON file
-     * @param outputDir Directory where grouped collections will be created
-     * @throws IOException if file operations fail
      */
     public void splitCollectionIntoIndividualRequests(String sourceFilePath, String outputDir) throws IOException {
         log.info("Reading source collection from: {}", sourceFilePath);
 
-        // Validate source file exists
-        File sourceFile = new File(sourceFilePath);
-        if (!sourceFile.exists()) {
-            throw new IOException("Source file not found: " + sourceFilePath);
-        }
+        // Validate and read source collection
+        PostmanCollection sourceCollection = readCollectionFile(sourceFilePath);
 
-        // Read the source collection
-        PostmanCollection sourceCollection = objectMapper.readValue(sourceFile, PostmanCollection.class);
-
-        // Create output directory if it doesn't exist
+        // Create output directory
         Files.createDirectories(Paths.get(outputDir));
 
-        // Extract all items (requests) from the collection
-        List<PostmanCollection.Item> allItems = extractAllItems(sourceCollection.getItem());
+        // Extract, group, and create collections using functional approach
+        List<PostmanCollection.Item> allRequests = extractAllItems(sourceCollection.getItem());
 
-        log.info("Found {} requests in the collection", allItems.size());
+        log.info("Found {} requests in the collection", allRequests.size());
 
-        // Group requests by method + normalized resource
-        Map<String, List<PostmanCollection.Item>> groupedRequests = groupRequestsByResource(allItems);
+        Map<String, List<PostmanCollection.Item>> groupedRequests = allRequests.stream()
+                .filter(HAS_REQUEST)
+                .collect(Collectors.groupingBy(
+                        this::createGroupKeyForSplit,
+                        LinkedHashMap::new,
+                        Collectors.toList()
+                ));
 
         log.info("Grouped into {} unique resources", groupedRequests.size());
 
-        // Create one collection per group
-        int count = 0;
-        for (Map.Entry<String, List<PostmanCollection.Item>> entry : groupedRequests.entrySet()) {
-            String groupKey = entry.getKey();
-            List<PostmanCollection.Item> requests = entry.getValue();
+        // Create and save collections
+        groupedRequests.entrySet().stream()
+                .peek(entry -> log.info("Creating collection: {} ({} requests)",
+                        entry.getKey(), entry.getValue().size()))
+                .forEach(entry -> saveGroupedCollection(
+                        entry.getKey(),
+                        entry.getValue(),
+                        sourceCollection,
+                        outputDir
+                ));
 
-            // Create collection with all requests in this group
-            PostmanCollection newCollection = createGroupedCollection(requests, sourceCollection, groupKey);
-
-            // Use the resource name as the collection name
-            String fileName = sanitizeFileName(groupKey) + ".json";
-            String outputPath = outputDir + File.separator + fileName;
-
-            objectMapper.writerWithDefaultPrettyPrinter()
-                    .writeValue(new File(outputPath), newCollection);
-
-            count++;
-            log.info("Created collection {}/{}: {} ({} requests)",
-                    count, groupedRequests.size(), groupKey, requests.size());
-
-            // Log all requests in this group
-            for (PostmanCollection.Item req : requests) {
-                log.debug("  - {}", req.getName());
-            }
-        }
-
-        log.info("Successfully created {} grouped collections in: {}", count, outputDir);
+        log.info("Successfully created {} grouped collections in: {}", groupedRequests.size(), outputDir);
     }
 
     /**
      * Feature 2: Merge collections by grouping requests with same resource into folders
-     *
-     * Logic:
-     * 1. Extract URL from each request
-     * 2. Replace everything up to /ws/rest or /ws/soap
-     * 3. Remaining path is the resource group
-     * 4. Create a folder for each resource group
-     * 5. Name of each request = resource host (from original URL)
-     *
-     * @param sourceFolderPath Path to folder containing multiple Postman collections
-     * @param outputFilePath Path where the merged collection will be saved
-     * @throws IOException if file operations fail
      */
     public void mergeCollectionsFromFolder(String sourceFolderPath, String outputFilePath) throws IOException {
         log.info("Reading collections from folder: {}", sourceFolderPath);
 
-        // Validate source folder exists
-        File sourceFolder = new File(sourceFolderPath);
-        if (!sourceFolder.exists() || !sourceFolder.isDirectory()) {
-            throw new IOException("Source folder not found or is not a directory: " + sourceFolderPath);
-        }
+        validateDirectory(sourceFolderPath);
 
-        // Extract collection name from output file path
         String collectionName = extractCollectionNameFromFilePath(outputFilePath);
 
-        // Collect all requests from all collections
-        List<PostmanCollection.Item> allRequests = new ArrayList<>();
-        List<PostmanCollection.Variable> allVariables = new ArrayList<>();
-
-        // Find all JSON files in the folder
+        // Load all collections and extract requests using functional approach
         try (Stream<Path> paths = Files.walk(Paths.get(sourceFolderPath))) {
-            List<Path> jsonFiles = paths
-                    .filter(Files::isRegularFile)
-                    .filter(p -> p.toString().endsWith(".json"))
-                    .toList();
+
+            List<Path> jsonFiles = paths.filter(IS_JSON_FILE).toList();
 
             log.info("Found {} JSON files to merge", jsonFiles.size());
 
@@ -142,353 +112,360 @@ public class PostmanCollectionService {
                 throw new IOException("No JSON files found in folder: " + sourceFolderPath);
             }
 
-            int successCount = 0;
-            for (Path jsonFile : jsonFiles) {
-                try {
-                    PostmanCollection collection = objectMapper.readValue(jsonFile.toFile(), PostmanCollection.class);
+            // Load all requests and variables
+            LoadedData loadedData = jsonFiles.stream()
+                    .map(this::tryLoadCollection)
+                    .filter(Optional::isPresent)
+                    .map(Optional::get)
+                    .reduce(new LoadedData(), this::accumulate, this::combine);
 
-                    // Extract all requests
-                    List<PostmanCollection.Item> requests = extractAllItems(collection.getItem());
-                    allRequests.addAll(requests);
+            log.info("Loaded {} total requests from {} collections",
+                    loadedData.requests.size(), jsonFiles.size());
 
-                    // Collect variables
-                    if (collection.getVariable() != null) {
-                        for (PostmanCollection.Variable var : collection.getVariable()) {
-                            boolean exists = allVariables.stream()
-                                    .anyMatch(v -> v.getKey().equals(var.getKey()));
-                            if (!exists) {
-                                allVariables.add(var);
-                            }
-                        }
-                    }
+            // Group and rename requests
+            Map<String, List<PostmanCollection.Item>> groupedRequests =
+                    groupAndRenameRequestsForMerge(loadedData.requests);
 
-                    successCount++;
-                    log.info("Loaded collection {}/{}: {} ({} requests)",
-                            successCount, jsonFiles.size(),
-                            collection.getInfo().getName(),
-                            requests.size());
-                } catch (Exception e) {
-                    log.error("Failed to process file: {}. Error: {}", jsonFile.getFileName(), e.getMessage());
-                }
-            }
+            log.info("Grouped {} requests into {} resource folders",
+                    loadedData.requests.size(), groupedRequests.size());
 
-            if (successCount == 0) {
-                throw new IOException("Failed to merge any collections. Check if files are valid Postman collections.");
-            }
+            // Create and save merged collection
+            PostmanCollection mergedCollection = createMergedCollection(
+                    collectionName, groupedRequests, loadedData.variables);
+
+            saveMergedCollection(mergedCollection, outputFilePath);
+
+            log.info("Successfully merged into collection '{}' with {} folders: {}",
+                    collectionName, groupedRequests.size(), outputFilePath);
         }
-
-        // Group requests by resource group and rename them by host
-        Map<String, List<PostmanCollection.Item>> groupedRequests = groupAndRenameRequestsForMerge(allRequests);
-
-        log.info("Grouped {} requests into {} resource folders", allRequests.size(), groupedRequests.size());
-
-        // Create merged collection with folders
-        PostmanCollection mergedCollection = createMergedCollectionWithFolders(
-                collectionName, groupedRequests, allVariables);
-
-        // Create output directory if it doesn't exist
-        File outputFile = new File(outputFilePath);
-        if (outputFile.getParentFile() != null) {
-            Files.createDirectories(outputFile.getParentFile().toPath());
-        }
-
-        // Write merged collection to output file
-        objectMapper.writerWithDefaultPrettyPrinter()
-                .writeValue(outputFile, mergedCollection);
-
-        log.info("Successfully merged into collection '{}' with {} folders: {}",
-                collectionName, groupedRequests.size(), outputFilePath);
     }
 
     /**
-     * Group requests by resource group for MERGE operation
-     * AND rename each request to its host
-     *
-     * Logic:
-     * 1. Extract URL
-     * 2. Find /ws/rest or /ws/soap
-     * 3. Extract resource group (everything after the pattern)
-     * 4. Extract host from URL
-     * 5. Rename request to host
-     * 6. Group by resource
-     *
-     * Example:
-     *   URL: https://mule-dev.com/test-app-dev/ws/rest/GetCustomer
-     *   Resource Group: /GetCustomer
-     *   Host: mule-dev.com
-     *   Request renamed to: "mule-dev.com"
+     * Create group key for SPLIT operation
      */
-    private Map<String, List<PostmanCollection.Item>> groupAndRenameRequestsForMerge(List<PostmanCollection.Item> items) {
-        Map<String, List<PostmanCollection.Item>> grouped = new LinkedHashMap<>();
-
-        for (PostmanCollection.Item item : items) {
-            if (item.getRequest() == null) {
-                continue;
-            }
-
-            try {
-                // Extract URL
-                String urlString = extractUrlFromRequest(item);
-
-                if (urlString == null || urlString.isEmpty()) {
-                    log.warn("Empty URL for request: {}", item.getName());
-                    continue;
-                }
-
-                // Extract resource group (everything after /ws/rest or /ws/soap, without query params)
-                String resourceGroup = extractResourceGroup(urlString);
-
-                // Extract host from URL
-                String host = extractHost(urlString);
-
-                // Rename the request to the host
-                item.setName(host);
-
-                // Add to group
-                grouped.computeIfAbsent(resourceGroup, k -> new ArrayList<>()).add(item);
-
-                log.debug("Grouped '{}' -> Resource: '{}', Renamed to: '{}'",
-                        urlString, resourceGroup, host);
-
-            } catch (Exception e) {
-                log.warn("Could not process request '{}': {}", item.getName(), e.getMessage());
-            }
-        }
-
-        return grouped;
+    private String createGroupKeyForSplit(PostmanCollection.Item item) {
+        return extractUrlFromRequest(item)
+                .map(url -> {
+                    String method = extractMethod(item);
+                    String resource = extractNormalizedResourceForSplit(url);
+                    return method + " " + resource;
+                })
+                .orElseGet(() -> "UNKNOWN " + sanitizeFileName(item.getName()));
     }
 
     /**
-     * Extract URL string from request item
+     * Group and rename requests for MERGE operation
      */
-    private String extractUrlFromRequest(PostmanCollection.Item item) {
-        try {
-            Map<String, Object> request = (Map<String, Object>) item.getRequest();
-            Object urlObj = request.get("url");
-            return extractUrlString(urlObj);
-        } catch (Exception e) {
-            log.debug("Could not extract URL from request: {}", e.getMessage());
-            return null;
-        }
+    private Map<String, List<PostmanCollection.Item>> groupAndRenameRequestsForMerge(
+            List<PostmanCollection.Item> requests) {
+
+        return requests.stream()
+                .filter(HAS_REQUEST)
+                .map(this::enrichItemWithHostName)
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .collect(Collectors.groupingBy(
+                        EnrichedItem::resourceGroup,
+                        LinkedHashMap::new,
+                        Collectors.mapping(EnrichedItem::item, Collectors.toList())
+                ));
     }
 
     /**
-     * Extract resource group from URL
-     *
-     * Logic:
-     * 1. Find /ws/rest or /ws/soap in the URL
-     * 2. Extract everything after it
-     * 3. Remove query parameters
-     *
-     * Examples:
-     *   https://mule-dev.com/test-app-dev/ws/rest/GetCustomer?id=123 -> /GetCustomer
-     *   https://boomi-pp.com/ws/soap/CreateOrder -> /CreateOrder
-     *   https://mule-qa.com/app-qa/ws/rest/UpdateUser?name=test -> /UpdateUser
+     * Enrich item with host name and resource group
      */
-    private String extractResourceGroup(String urlString) {
-        // Try REST pattern first
-        int restIndex = urlString.indexOf(REST_PATTERN);
-        if (restIndex != -1) {
-            String resource = urlString.substring(restIndex + REST_PATTERN.length());
-            return removeQueryParams(resource);
-        }
+    private Optional<EnrichedItem> enrichItemWithHostName(PostmanCollection.Item item) {
+        return extractUrlFromRequest(item)
+                .map(url -> {
+                    String resourceGroup = extractResourceGroup(url);
+                    String host = extractHost(url);
 
-        // Try SOAP pattern
-        int soapIndex = urlString.indexOf(SOAP_PATTERN);
-        if (soapIndex != -1) {
-            String resource = urlString.substring(soapIndex + SOAP_PATTERN.length());
-            return removeQueryParams(resource);
-        }
+                    // Rename the item
+                    item.setName(host);
 
-        // Fallback: use the entire path
-        try {
-            URI uri = new URI(urlString);
-            String path = uri.getPath();
-            return removeQueryParams(path != null ? path : "/unknown");
-        } catch (URISyntaxException e) {
-            log.warn("Could not parse URI: {}", urlString);
-            return "/unknown";
-        }
+                    log.debug("Grouped to '{}', renamed to '{}'", resourceGroup, host);
+
+                    return new EnrichedItem(resourceGroup, item);
+                });
     }
 
     /**
-     * Extract host from URL
-     *
-     * Examples:
-     *   https://mule-dev.com/test-app-dev/ws/rest/GetCustomer -> mule-dev.com
-     *   https://mule-qa.com:8080/app/ws/rest/GetUser -> mule-qa.com:8080
-     *   https://boomi-pp.com/ws/soap/CreateOrder -> boomi-pp.com
+     * Extract all items recursively using Stream flatMap
      */
-    private String extractHost(String urlString) {
-        try {
-            URI uri = new URI(urlString);
-            String host = uri.getHost();
-            int port = uri.getPort();
-
-            if (host == null) {
-                return "unknown-host";
-            }
-
-            // Include port if it's not the default (80 for HTTP, 443 for HTTPS)
-            if (port != -1 && port != 80 && port != 443) {
-                return host + ":" + port;
-            }
-
-            return host;
-        } catch (URISyntaxException e) {
-            log.warn("Could not extract host from URL: {}", urlString);
-            return "unknown-host";
-        }
+    private List<PostmanCollection.Item> extractAllItems(List<PostmanCollection.Item> items) {
+        return Optional.ofNullable(items)
+                .orElse(Collections.emptyList())
+                .stream()
+                .flatMap(this::flattenItem)
+                .toList();
     }
 
     /**
-     * Remove query parameters from a string
+     * Flatten item recursively
      */
-    private String removeQueryParams(String str) {
-        if (str == null) {
-            return "";
+    private Stream<PostmanCollection.Item> flattenItem(PostmanCollection.Item item) {
+        if (IS_FOLDER.test(item)) {
+            return item.getItem().stream().flatMap(this::flattenItem);
+        } else if (HAS_REQUEST.test(item)) {
+            return Stream.of(item);
         }
-
-        int queryIndex = str.indexOf('?');
-        if (queryIndex != -1) {
-            str = str.substring(0, queryIndex);
-        }
-
-        int fragmentIndex = str.indexOf('#');
-        if (fragmentIndex != -1) {
-            str = str.substring(0, fragmentIndex);
-        }
-
-        return str;
+        return Stream.empty();
     }
 
     /**
-     * Group requests by METHOD + normalized resource path for SPLIT operation
-     *
-     * Grouping Logic:
-     * 1. Extract HTTP method (GET, POST, PUT, DELETE, etc.)
-     * 2. Extract URL and find /ws/rest or /ws/soap
-     * 3. Extract everything from that pattern onwards
-     * 4. Remove query parameters
-     * 5. Group key = METHOD + resource path
+     * Extract URL from request using Optional
      */
-    private Map<String, List<PostmanCollection.Item>> groupRequestsByResource(List<PostmanCollection.Item> items) {
-        Map<String, List<PostmanCollection.Item>> grouped = new LinkedHashMap<>();
-
-        for (PostmanCollection.Item item : items) {
-            if (item.getRequest() == null) {
-                continue;
-            }
-
-            try {
-                // Extract method
-                String method = extractMethod(item);
-
-                // Extract URL
-                String urlString = extractUrlFromRequest(item);
-
-                if (urlString == null || urlString.isEmpty()) {
-                    log.warn("Empty URL for request: {}", item.getName());
-                    continue;
-                }
-
-                // Extract normalized resource
-                String normalizedResource = extractNormalizedResourceForSplit(urlString);
-
-                // Create group key: "METHOD /ws/rest/ResourceName"
-                String groupKey = method + " " + normalizedResource;
-
-                // Add to group
-                grouped.computeIfAbsent(groupKey, k -> new ArrayList<>()).add(item);
-
-                log.debug("Grouped '{}' -> '{}'", item.getName(), groupKey);
-
-            } catch (Exception e) {
-                log.warn("Could not process request '{}': {}", item.getName(), e.getMessage());
-            }
-        }
-
-        return grouped;
+    private Optional<String> extractUrlFromRequest(PostmanCollection.Item item) {
+        return Optional.ofNullable(item.getRequest())
+                .filter(Map.class::isInstance)
+                .map(req -> (Map<String, Object>) req)
+                .map(req -> req.get("url"))
+                .map(this::extractUrlString)
+                .filter(url -> !url.isEmpty());
     }
-
+    
     /**
-     * Extract normalized resource for SPLIT operation
-     * Includes the /ws/rest or /ws/soap pattern in the result
-     */
-    private String extractNormalizedResourceForSplit(String urlString) {
-        // Try REST pattern
-        int restIndex = urlString.indexOf(REST_PATTERN);
-        if (restIndex != -1) {
-            String resource = urlString.substring(restIndex);
-            return removeQueryParams(resource);
-        }
-
-        // Try SOAP pattern
-        int soapIndex = urlString.indexOf(SOAP_PATTERN);
-        if (soapIndex != -1) {
-            String resource = urlString.substring(soapIndex);
-            return removeQueryParams(resource);
-        }
-
-        // Fallback
-        try {
-            URI uri = new URI(urlString);
-            String path = uri.getPath();
-            return removeQueryParams(path != null ? path : "/unknown");
-        } catch (URISyntaxException e) {
-            return "/unknown";
-        }
-    }
-
-    /**
-     * Extract HTTP method from request item
-     */
-    private String extractMethod(PostmanCollection.Item item) {
-        try {
-            Map<String, Object> request = (Map<String, Object>) item.getRequest();
-            Object methodObj = request.get("method");
-
-            if (methodObj != null) {
-                return methodObj.toString().toUpperCase();
-            }
-        } catch (Exception e) {
-            log.debug("Could not extract method from request: {}", e.getMessage());
-        }
-
-        return "GET"; // Default
-    }
-
-    /**
-     * Extract URL string from various Postman URL formats
+     * Extract URL string from various formats
      */
     private String extractUrlString(Object urlObj) {
         if (urlObj == null) {
-            return null;
+            return "";
         }
 
-        if (urlObj instanceof String) {
-            return (String) urlObj;
+        if (urlObj instanceof String stringUrl) {
+            return stringUrl;
         }
 
-        if (urlObj instanceof Map) {
-            Map<String, Object> urlMap = (Map<String, Object>) urlObj;
-            Object raw = urlMap.get("raw");
-            if (raw != null) {
-                return raw.toString();
-            }
-
-            Object href = urlMap.get("href");
-            if (href != null) {
-                return href.toString();
-            }
+        if (urlObj instanceof Map<?, ?> urlMap) {
+            // Try raw and href fields using Stream
+            return Stream.of("raw", "href")
+                    .map(urlMap::get)
+                    .filter(Objects::nonNull)
+                    .map(Object::toString)
+                    .findFirst()
+                    .orElse("");
         }
 
         return urlObj.toString();
     }
 
+
     /**
-     * Create a collection containing all requests from a group
-     * Used for SPLIT operation
+     * Extract URL string from map structure
+     */
+    private String extractFromUrlMap(Map<?, ?> urlMap) {
+        Object raw = urlMap.get("raw");
+        if (raw != null) {
+            return raw.toString();
+        }
+
+        Object href = urlMap.get("href");
+        if (href != null) {
+            return href.toString();
+        }
+
+        return "";
+    }
+
+
+    /**
+     * Extract HTTP method using Optional
+     */
+    private String extractMethod(PostmanCollection.Item item) {
+        return Optional.ofNullable(item.getRequest())
+                .filter(Map.class::isInstance)
+                .map(req -> (Map<String, Object>) req)
+                .map(req -> req.get("method"))
+                .map(Object::toString)
+                .map(String::toUpperCase)
+                .orElse("GET");
+    }
+
+    /**
+     * Extract normalized resource for SPLIT (includes /ws/rest or /ws/soap)
+     */
+    private String extractNormalizedResourceForSplit(String urlString) {
+        return Stream.of(REST_PATTERN, SOAP_PATTERN)
+                .map(pattern -> extractFromPattern(urlString, pattern, true))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .findFirst()
+                .orElseGet(() -> extractPathFallback(urlString));
+    }
+
+    /**
+     * Extract resource group for MERGE (excludes /ws/rest or /ws/soap)
+     */
+    private String extractResourceGroup(String urlString) {
+        return Stream.of(REST_PATTERN, SOAP_PATTERN)
+                .map(pattern -> extractFromPattern(urlString, pattern, false))
+                .filter(Optional::isPresent)
+                .map(Optional::get)
+                .findFirst()
+                .orElseGet(() -> extractPathFallback(urlString));
+    }
+
+    /**
+     * Extract resource from URL based on pattern
+     * @param includePattern if true, includes the pattern in result (for SPLIT)
+     *                       if false, excludes the pattern (for MERGE)
+     */
+    private Optional<String> extractFromPattern(String urlString, String pattern, boolean includePattern) {
+        int index = urlString.indexOf(pattern);
+        if (index != -1) {
+            int startIndex = includePattern ? index : index + pattern.length();
+            String resource = urlString.substring(startIndex);
+            return Optional.of(removeQueryParams(resource));
+        }
+        return Optional.empty();
+    }
+
+    /**
+     * Extract host from URL using Optional and URI
+     */
+    private String extractHost(String urlString) {
+        return tryParseUri(urlString)
+                .map(uri -> {
+                    String host = uri.getHost();
+                    int port = uri.getPort();
+
+                    if (host == null) {
+                        return "unknown-host";
+                    }
+
+                    // Include port if non-standard
+                    return (port != -1 && port != 80 && port != 443)
+                            ? host + ":" + port
+                            : host;
+                })
+                .orElse("unknown-host");
+    }
+
+    /**
+     * Fallback path extraction using URI
+     */
+    private String extractPathFallback(String urlString) {
+        return tryParseUri(urlString)
+                .map(URI::getPath)
+                .map(this::removeQueryParams)
+                .filter(path -> !path.isEmpty())
+                .orElse("/unknown");
+    }
+
+    /**
+     * Try to parse URI, return Optional
+     */
+    private Optional<URI> tryParseUri(String urlString) {
+        try {
+            return Optional.of(new URI(urlString));
+        } catch (URISyntaxException e) {
+            log.debug("Could not parse URI: {}", urlString);
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Remove query parameters and fragments
+     */
+    private String removeQueryParams(String str) {
+        return Optional.ofNullable(str)
+                .map(s -> s.split("[?#]")[0])
+                .orElse("");
+    }
+
+    /**
+     * Read collection file with error handling
+     */
+    private PostmanCollection readCollectionFile(String filePath) throws IOException {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            throw new IOException("Source file not found: " + filePath);
+        }
+        return objectMapper.readValue(file, PostmanCollection.class);
+    }
+
+    /**
+     * Validate directory exists
+     */
+    private void validateDirectory(String dirPath) throws IOException {
+        File dir = new File(dirPath);
+        if (!dir.exists() || !dir.isDirectory()) {
+            throw new IOException("Source folder not found or is not a directory: " + dirPath);
+        }
+    }
+
+    /**
+     * Try to load collection, return Optional
+     */
+    private Optional<PostmanCollection> tryLoadCollection(Path path) {
+        try {
+            PostmanCollection collection = objectMapper.readValue(path.toFile(), PostmanCollection.class);
+            log.info("Loaded collection: {} ({} items)",
+                    collection.getInfo().getName(),
+                    Optional.ofNullable(collection.getItem()).map(List::size).orElse(0));
+            return Optional.of(collection);
+        } catch (Exception e) {
+            log.error("Failed to process file: {}. Error: {}", path.getFileName(), e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /**
+     * Accumulate loaded data
+     */
+    private LoadedData accumulate(LoadedData accumulated, PostmanCollection collection) {
+        // Add all requests
+        accumulated.requests.addAll(extractAllItems(collection.getItem()));
+
+        // Merge variables
+        Optional.ofNullable(collection.getVariable())
+                .orElse(Collections.emptyList())
+                .stream()
+                .filter(var -> accumulated.variables.stream()
+                        .noneMatch(existing -> existing.getKey().equals(var.getKey())))
+                .forEach(accumulated.variables::add);
+
+        return accumulated;
+    }
+
+    /**
+     * Combine two LoadedData instances
+     */
+    private LoadedData combine(LoadedData data1, LoadedData data2) {
+        data1.requests.addAll(data2.requests);
+
+        data2.variables.stream()
+                .filter(var -> data1.variables.stream()
+                        .noneMatch(existing -> existing.getKey().equals(var.getKey())))
+                .forEach(data1.variables::add);
+
+        return data1;
+    }
+
+    /**
+     * Save grouped collection for SPLIT operation
+     */
+    private void saveGroupedCollection(String groupKey,
+                                       List<PostmanCollection.Item> requests,
+                                       PostmanCollection sourceCollection,
+                                       String outputDir) {
+        try {
+            PostmanCollection newCollection = createGroupedCollection(requests, sourceCollection, groupKey);
+
+            String fileName = sanitizeFileName(groupKey) + ".json";
+            Path outputPath = Paths.get(outputDir, fileName);
+
+            objectMapper.writerWithDefaultPrettyPrinter()
+                    .writeValue(outputPath.toFile(), newCollection);
+
+            log.info("Created collection: {}", fileName);
+        } catch (IOException e) {
+            log.error("Failed to save collection '{}': {}", groupKey, e.getMessage());
+        }
+    }
+
+    /**
+     * Create grouped collection
      */
     private PostmanCollection createGroupedCollection(List<PostmanCollection.Item> requests,
                                                       PostmanCollection sourceCollection,
@@ -503,25 +480,20 @@ public class PostmanCollectionService {
         newCollection.setInfo(info);
 
         newCollection.setItem(new ArrayList<>(requests));
-
-        if (sourceCollection.getVariable() != null) {
-            newCollection.setVariable(new ArrayList<>(sourceCollection.getVariable()));
-        } else {
-            newCollection.setVariable(new ArrayList<>());
-        }
+        newCollection.setVariable(Optional.ofNullable(sourceCollection.getVariable())
+                .map(ArrayList::new)
+                .orElse(new ArrayList<>()));
         newCollection.setAuth(sourceCollection.getAuth());
 
         return newCollection;
     }
 
     /**
-     * Create merged collection with folder structure for MERGE operation
-     * Each resource group becomes a folder
-     * Each request inside is named by its host
+     * Create merged collection with folders
      */
-    private PostmanCollection createMergedCollectionWithFolders(String collectionName,
-                                                                Map<String, List<PostmanCollection.Item>> groupedRequests,
-                                                                List<PostmanCollection.Variable> variables) {
+    private PostmanCollection createMergedCollection(String collectionName,
+                                                     Map<String, List<PostmanCollection.Item>> groupedRequests,
+                                                     List<PostmanCollection.Variable> variables) {
         PostmanCollection mergedCollection = new PostmanCollection();
 
         PostmanCollection.Info info = new PostmanCollection.Info();
@@ -531,91 +503,88 @@ public class PostmanCollectionService {
         info.setSchema("https://schema.getpostman.com/json/collection/v2.1.0/collection.json");
         mergedCollection.setInfo(info);
 
-        List<PostmanCollection.Item> folders = new ArrayList<>();
+        List<PostmanCollection.Item> folders = groupedRequests.entrySet().stream()
+                .map(entry -> createFolder(entry.getKey(), entry.getValue()))
+                .peek(folder -> log.debug("Created folder '{}' with {} requests",
+                        folder.getName(), folder.getItem().size()))
+                .toList();
 
-        for (Map.Entry<String, List<PostmanCollection.Item>> entry : groupedRequests.entrySet()) {
-            String resourceGroup = entry.getKey();
-            List<PostmanCollection.Item> requests = entry.getValue();
-
-            // Create folder named by resource group
-            PostmanCollection.Item folder = new PostmanCollection.Item();
-            folder.setName(resourceGroup);
-            folder.setDescription("Resource: " + resourceGroup + " (" + requests.size() + " environments)");
-            folder.setItem(new ArrayList<>(requests));
-
-            folders.add(folder);
-
-            log.debug("Created folder '{}' with {} requests", resourceGroup, requests.size());
-            for (PostmanCollection.Item req : requests) {
-                log.debug("  - {}", req.getName());
-            }
-        }
-
-        mergedCollection.setItem(folders);
+        mergedCollection.setItem(new ArrayList<>(folders));
         mergedCollection.setVariable(variables);
 
         return mergedCollection;
     }
 
     /**
-     * Extract collection name from output file path
+     * Create folder item
+     */
+    private PostmanCollection.Item createFolder(String resourceGroup, List<PostmanCollection.Item> requests) {
+        PostmanCollection.Item folder = new PostmanCollection.Item();
+        folder.setName(resourceGroup);
+        folder.setDescription("Resource: " + resourceGroup + " (" + requests.size() + " environments)");
+        folder.setItem(new ArrayList<>(requests));
+        return folder;
+    }
+
+    /**
+     * Save merged collection
+     */
+    private void saveMergedCollection(PostmanCollection collection, String outputFilePath) throws IOException {
+        File outputFile = new File(outputFilePath);
+
+        Optional.ofNullable(outputFile.getParentFile())
+                .ifPresent(parent -> {
+                    try {
+                        Files.createDirectories(parent.toPath());
+                    } catch (IOException e) {
+                        log.error("Failed to create output directory: {}", e.getMessage());
+                    }
+                });
+
+        objectMapper.writerWithDefaultPrettyPrinter()
+                .writeValue(outputFile, collection);
+    }
+
+    /**
+     * Extract collection name from file path
      */
     private String extractCollectionNameFromFilePath(String filePath) {
-        File file = new File(filePath);
-        String fileName = file.getName();
-
-        if (fileName.toLowerCase().endsWith(".json")) {
-            fileName = fileName.substring(0, fileName.length() - 5);
-        }
-
-        if (fileName.trim().isEmpty()) {
-            return "Merged Collection";
-        }
-
-        return fileName;
+        return Optional.of(new File(filePath))
+                .map(File::getName)
+                .map(name -> name.toLowerCase().endsWith(".json")
+                        ? name.substring(0, name.length() - 5)
+                        : name)
+                .filter(name -> !name.trim().isEmpty())
+                .orElse("Merged Collection");
     }
 
     /**
-     * Recursively extract all items from nested folders
-     */
-    private List<PostmanCollection.Item> extractAllItems(List<PostmanCollection.Item> items) {
-        List<PostmanCollection.Item> allItems = new ArrayList<>();
-
-        if (items == null) {
-            return allItems;
-        }
-
-        for (PostmanCollection.Item item : items) {
-            if (item.getItem() != null && !item.getItem().isEmpty()) {
-                allItems.addAll(extractAllItems(item.getItem()));
-            } else if (item.getRequest() != null) {
-                allItems.add(item);
-            }
-        }
-
-        return allItems;
-    }
-
-    /**
-     * Sanitize filename by removing invalid characters
+     * Sanitize filename
      */
     private String sanitizeFileName(String name) {
-        if (name == null || name.trim().isEmpty()) {
-            return "unnamed_request";
-        }
-
-        String sanitized = name.replaceAll("[<>:\"/\\\\|?*]", "_");
-        sanitized = sanitized.replaceAll("\\s+", "_");
-        sanitized = sanitized.replaceAll("^[_\\s]+|[_\\s]+$", "");
-
-        if (sanitized.isEmpty()) {
-            return "unnamed_request";
-        }
-
-        if (sanitized.length() > 200) {
-            sanitized = sanitized.substring(0, 200);
-        }
-
-        return sanitized;
+        return Optional.ofNullable(name)
+                .map(String::trim)
+                .filter(s -> !s.isEmpty())
+                .map(s -> s.replaceAll("[<>:\"/\\\\|?*]", "_"))
+                .map(s -> s.replaceAll("\\s+", "_"))
+                .map(s -> s.replaceAll("^[_\\s]+|[_\\s]+$", ""))
+                .map(s -> s.length() > 200 ? s.substring(0, 200) : s)
+                .filter(s -> !s.isEmpty())
+                .orElse("unnamed_request");
     }
+
+    // Helper records for functional composition
+
+    /**
+     * Container for loaded collection data
+     */
+    private static class LoadedData {
+        final List<PostmanCollection.Item> requests = new ArrayList<>();
+        final List<PostmanCollection.Variable> variables = new ArrayList<>();
+    }
+
+    /**
+     * Record for enriched item with resource group
+     */
+    private record EnrichedItem(String resourceGroup, PostmanCollection.Item item) {}
 }
