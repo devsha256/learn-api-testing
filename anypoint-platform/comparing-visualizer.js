@@ -1,43 +1,38 @@
 /**
- * MULESOFT CLOUDHUB 2.0 DEPLOYMENT AUDITOR
- * Logic: Recursive Serial Execution with Prefix-Based Variable Discovery
- * UI: Edge-to-Edge Material Design 3 with Indexing & Mismatch Toggles
+ * MULESOFT CH2.0 DEPLOYMENT AUDITOR (MATERIAL 3)
+ * Full Unified Script: Discovery + Execution + Visualization
  */
 
-// 1. CONFIGURATION & DYNAMIC DISCOVERY
+// 1. --- CONFIGURATION & DISCOVERY ---
 const token = pm.collectionVariables.get("token");
 const orgId = pm.collectionVariables.get("orgId");
-const envPrefix = pm.collectionVariables.get("envPrefix"); 
 const baselineEnvKey = pm.collectionVariables.get("baselineEnv") || "dev";
 const throttleMs = parseInt(pm.collectionVariables.get("throttleMs")) || 150;
 
 const rows = {};
 const allVars = pm.collectionVariables.toObject();
-
-// Discover environments based on envPrefix match
 const environments = Object.keys(allVars)
-    .filter(key => key.startsWith(envPrefix))
-    .map(key => ({ 
-        label: key.replace(envPrefix + "-", "").toLowerCase(), 
-        id: allVars[key]
-    }));
+    .filter(key => key.startsWith("digital-"))
+    .map(key => ({ label: key.replace("digital-", ""), id: allVars[key] }));
 
-console.log(`[START] Audit initiated. Found ${environments.length} environments.`);
+console.log(`[START] Auditor initialized for ${environments.length} environments.`);
 
-// 2. HELPER: NAME NORMALIZATION
+// 2. --- UTILS ---
 function normalizeAppName(name) {
     const parts = name.split("-");
     return parts.length > 1 ? parts.slice(0, -1).join("-") : name;
 }
 
-// 3. SERIAL EXECUTION ENGINE
-function processEnvironment(index) {
-    if (index >= environments.length) {
+// 3. --- RECURSIVE ASYNC ENGINE (The Core) ---
+function runAudit(envIndex) {
+    if (envIndex >= environments.length) {
         finalize();
         return;
     }
 
-    const env = environments[index];
+    const env = environments[envIndex];
+    console.log(`[FETCH] Environment: ${env.label}...`);
+
     const listOptions = {
         url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments`,
         method: 'GET',
@@ -50,27 +45,27 @@ function processEnvironment(index) {
 
     pm.sendRequest(listOptions, (err, res) => {
         if (err || res.code !== 200) {
-            console.error(`[ERROR] ${env.label} failed.`);
-            processEnvironment(index + 1);
+            console.error(`[SKIP] ${env.label} failed or unauthorized.`);
+            runAudit(envIndex + 1);
             return;
         }
 
-        const deployments = res.json().items || [];
-        processDeployments(env, deployments, 0, () => {
-            processEnvironment(index + 1);
+        const items = res.json().items || [];
+        processAppsSerial(env, items, 0, () => {
+            runAudit(envIndex + 1); // Next environment
         });
     });
 }
 
-function processDeployments(env, list, depIndex, onComplete) {
-    if (depIndex >= list.length) {
-        onComplete();
+function processAppsSerial(env, apps, appIndex, onDone) {
+    if (appIndex >= apps.length) {
+        onDone();
         return;
     }
 
-    const dep = list[depIndex];
+    const app = apps[appIndex];
     const detailOptions = {
-        url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments/${dep.id}`,
+        url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments/${app.id}`,
         method: 'GET',
         header: {
             'Authorization': `Bearer ${token}`,
@@ -92,17 +87,19 @@ function processDeployments(env, list, depIndex, onComplete) {
                     status: data.status || "UNKNOWN"
                 };
             }
-            processDeployments(env, list, depIndex + 1, onComplete);
+            processAppsSerial(env, apps, appIndex + 1, onDone);
         });
     }, throttleMs);
 }
 
-// 4. FINALIZER
+// 4. --- DATA FINALIZATION & VISUALIZER ---
 function finalize() {
-    const finalRows = Object.keys(rows).sort().map((appName, index) => {
+    console.log("[DATA] Aggregating results...");
+    
+    const finalRows = Object.keys(rows).map(appName => {
         const appData = rows[appName];
         const baseVer = appData[baselineEnvKey]?.appVersion;
-        let rowHasMismatch = false;
+        let rowMismatch = false;
         
         const envDetails = environments.map(env => {
             const cur = appData[env.label];
@@ -111,38 +108,30 @@ function finalize() {
             if (!cur) mClass = "v-missing";
             else if (env.label === baselineEnvKey) mClass = "v-baseline";
             else if (cur.appVersion === baseVer) mClass = "v-match";
-            else { rowHasMismatch = true; }
+            else rowMismatch = true; // Mark row for highlighting
 
-            return { 
-                envLabel: env.label, 
-                exists: !!cur, 
-                appVersion: cur?.appVersion || "N/A", 
-                runtimeVersion: cur?.runtimeVersion || "N/A", 
-                matchClass: mClass 
-            };
+            return { envLabel: env.label, exists: !!cur, appVersion: cur?.appVersion || "N/A", 
+                     runtimeVersion: cur?.runtimeVersion || "N/A", status: cur?.status || "", matchClass: mClass };
         });
 
-        return { 
-            index: index + 1,
-            appName, 
-            envDetails, 
-            isMismatch: rowHasMismatch 
-        };
+        return { appName, envDetails, isMismatch: rowMismatch };
     });
 
-    pm.visualizer.set(template, {
-        finalRows, 
+    const vizPayload = {
+        finalRows,
         envs: environments.map(e => e.label),
         baseline: baselineEnvKey
-    });
+    };
+
+    pm.visualizer.set(template, vizPayload);
+    console.log("[COMPLETE] Audit finished. Open Visualizer tab.");
 }
 
-// 5. VISUALIZER TEMPLATE
+// 5. --- MATERIAL 3 UI TEMPLATE ---
 const template = `
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
@@ -153,82 +142,75 @@ const template = `
             --md-sys-color-error-container: #FFDAD6;
         }
 
-        /* 1. Viewport Fix: Force full height/width and remove all margins */
         body, html { 
-            height: 100%; width: 100%; margin: 0; padding: 0; 
+            height: 100%; width: 100vw; margin: 0; padding: 0; 
             font-family: 'Roboto', sans-serif; background: var(--md-sys-color-surface); 
             overflow: hidden; 
         }
 
         .wrapper { display: flex; height: 100vh; width: 100vw; }
 
-        /* Sidebar Nav */
         .sidebar {
             width: 72px; background: #F3EDF7; border-right: 1px solid var(--md-sys-color-outline);
             display: flex; flex-direction: column; align-items: center; padding-top: 16px; gap: 12px;
         }
-        .nav-item { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #49454F; }
-        .nav-item.active { background: #EADDFF; color: #21005D; }
 
-        .container { flex: 1; display: flex; flex-direction: column; height: 100vh; }
+        .container { flex: 1; display: flex; flex-direction: column; height: 100vh; width: calc(100vw - 72px); }
 
-        /* Header Fix: Consistent height, zero side gaps */
         .header {
             padding: 8px 16px; background: white; border-bottom: 1px solid var(--md-sys-color-outline);
-            display: flex; align-items: center; gap: 20px; height: 56px; box-sizing: border-box;
+            display: flex; align-items: center; justify-content: space-between; height: 56px;
         }
 
-        .search-bar { background: #ECE6F0; border-radius: 28px; padding: 0 16px; display: flex; align-items: center; flex: 1; max-width: 400px; height: 40px; }
+        .search-bar { background: #ECE6F0; border-radius: 28px; padding: 0 16px; display: flex; align-items: center; width: 300px; height: 40px; }
         .search-bar input { border: none; background: transparent; outline: none; width: 100%; font-size: 14px; }
-        
-        /* 2. Unused Space Fix: Table area takes all remaining height */
+
         .table-area { flex: 1; overflow: auto; background: white; width: 100%; }
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        table { width: 100%; border-collapse: collapse; min-width: 100%; }
         
         th { 
             position: sticky; top: 0; background: #F7F2FA; z-index: 10;
-            padding: 12px; text-align: left; font-size: 12px; color: #49454F;
+            padding: 16px; text-align: left; font-size: 12px; color: #49454F;
             border-bottom: 2px solid var(--md-sys-color-outline);
         }
         
-        /* 3. Index Column: Centered alignment */
-        .col-index { width: 50px; text-align: center !important; color: #938F99; font-size: 11px; }
-        .col-name { width: 35%; }
+        .col-index { width: 50px; text-align: center !important; font-weight: bold; color: #938F99; }
 
-        td { padding: 12px; border-bottom: 1px solid #E7E0EC; vertical-align: middle; }
+        td { padding: 16px; border-bottom: 1px solid #E7E0EC; vertical-align: middle; }
 
-        tr.mismatch-row { background-color: var(--md-sys-color-error-container); }
-        .v-match { color: #2E7D32; font-weight: 700; }
+        tr.mismatch-row { background-color: var(--md-sys-color-error-container) !important; }
         .v-mismatch { color: #B3261E; font-weight: 900; text-decoration: underline; }
+        .v-match { color: #2E7D32; font-weight: 700; }
+        .v-baseline { color: #0061A4; font-weight: 700; }
 
-        .btn-fab { background: var(--md-sys-color-primary); color: white; border: none; padding: 8px 16px; border-radius: 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+        .btn-fab { background: var(--md-sys-color-primary); color: white; border: none; padding: 10px 20px; border-radius: 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
 
-        #snackbar { visibility: hidden; min-width: 200px; background: #322F35; color: white; padding: 12px; position: fixed; bottom: 20px; left: 88px; border-radius: 4px; }
+        #snackbar { visibility: hidden; min-width: 200px; background: #322F35; color: white; padding: 12px; position: fixed; bottom: 20px; left: 88px; border-radius: 4px; z-index: 999; }
         #snackbar.show { visibility: visible; }
-        #csvFallback { position: absolute; left: -9999px; }
+        
+        #hidden-copy-area { position: absolute; left: -9999px; }
     </style>
 </head>
 <body>
     <div class="wrapper">
         <nav class="sidebar">
             <div class="nav-item active"><span class="material-icons">fact_check</span></div>
-            <div class="nav-item"><span class="material-icons">insights</span></div>
         </nav>
 
         <main class="container">
             <header class="header">
                 <div class="search-bar">
-                    <span class="material-icons" style="font-size:20px">search</span>
-                    <input type="text" id="searchInput" onkeyup="updateFilters()" placeholder="Search apps...">
+                    <span class="material-icons" style="font-size:20px; color:#444">search</span>
+                    <input type="text" id="searchInput" onkeyup="filterTable()" placeholder="Search apps...">
                 </div>
                 
-                <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
-                    <span>Mismatches Only</span>
-                    <input type="checkbox" id="mismatchToggle" onchange="updateFilters()">
+                <div style="display:flex; align-items:center; gap:12px;">
+                    <span style="font-size:13px; font-weight:500">Mismatches Only</span>
+                    <input type="checkbox" id="mismatchToggle" onchange="filterTable()">
                 </div>
 
-                <button class="btn-fab" id="copyCsvBtn">
-                    <span class="material-icons">content_copy</span> Copy CSV
+                <button class="btn-fab" id="btn-copy">
+                    <span class="material-icons">content_copy</span> COPY CSV
                 </button>
             </header>
 
@@ -237,16 +219,16 @@ const template = `
                     <thead>
                         <tr>
                             <th class="col-index">#</th>
-                            <th class="col-name">Application Name</th>
+                            <th>Application Name</th>
                             {{#each envs}}
-                            <th>{{this}}</th>
+                            <th>{{this}} {{#if (eq this ../baseline)}}(B){{/if}}</th>
                             {{/each}}
                         </tr>
                     </thead>
                     <tbody id="tableBody">
                         {{#each finalRows}}
                         <tr class="app-row {{#if isMismatch}}mismatch-row{{/if}}" data-name="{{appName}}" data-mismatch="{{isMismatch}}">
-                            <td class="row-index col-index"></td>
+                            <td class="col-index row-index"></td>
                             <td><strong>{{appName}}</strong></td>
                             {{#each envDetails}}
                             <td>
@@ -266,47 +248,36 @@ const template = `
         </main>
     </div>
 
-    <textarea id="csvFallback"></textarea>
-    <div id="snackbar">CSV Copied</div>
+    <textarea id="hidden-copy-area"></textarea>
+    <div id="snackbar">CSV Copied to Clipboard</div>
 
     <script>
         const d = pm.getData();
 
-        // 4. Dynamic Indexing: Recalculate IDs based on what is visible
-        function updateFilters() {
+        function filterTable() {
             const query = document.getElementById('searchInput').value.toLowerCase();
             const showOnlyMismatches = document.getElementById('mismatchToggle').checked;
             const rows = document.querySelectorAll('.app-row');
-            let visibleCount = 0;
+            let counter = 0;
 
             rows.forEach(row => {
                 const name = row.getAttribute('data-name').toLowerCase();
-                const isMismatch = row.getAttribute('data-mismatch') === 'true';
-                
-                const matchesSearch = name.includes(query);
-                const matchesToggle = !showOnlyMismatches || isMismatch;
+                const mismatch = row.getAttribute('data-mismatch') === 'true';
+                const matchSearch = name.includes(query);
+                const matchToggle = !showOnlyMismatches || mismatch;
 
-                if (matchesSearch && matchesToggle) {
+                if (matchSearch && matchToggle) {
                     row.style.display = '';
-                    visibleCount++;
-                    row.querySelector('.row-index').textContent = visibleCount;
+                    counter++;
+                    row.querySelector('.row-index').textContent = counter;
                 } else {
                     row.style.display = 'none';
                 }
             });
         }
 
-        async function copyText(text) {
-            const ta = document.getElementById('csvFallback');
-            ta.value = text;
-            ta.select();
-            document.execCommand('copy');
-            const x = document.getElementById("snackbar");
-            x.className = "show";
-            setTimeout(() => x.className = "", 2000);
-        }
-
-        document.getElementById('copyCsvBtn').addEventListener('click', () => {
+        // --- FIXED COPY LOGIC ---
+        document.getElementById('btn-copy').addEventListener('click', function() {
             let csv = "App,Baseline," + d.envs.join(",") + "\\n";
             d.finalRows.forEach(r => {
                 let row = [r.appName];
@@ -315,15 +286,33 @@ const template = `
                 r.envDetails.forEach(e => row.push(e.appVersion));
                 csv += row.join(",") + "\\n";
             });
-            copyText(csv);
+
+            const ta = document.getElementById('hidden-copy-area');
+            ta.value = csv;
+            ta.focus();
+            ta.select();
+            
+            try {
+                const ok = document.execCommand('copy');
+                if (ok) {
+                    const sb = document.getElementById("snackbar");
+                    sb.className = "show";
+                    setTimeout(() => sb.className = "", 2500);
+                }
+            } catch (err) { console.error("Copy failed", err); }
         });
 
-        // Initialize Index on load
-        updateFilters();
+        // Init indices
+        filterTable();
+        Handlebars.registerHelper('eq', (a, b) => a === b);
     </script>
 </body>
 </html>
 `;
 
-// 6. START EXECUTION
-processEnvironment(0);
+// 6. --- START RECURSION ---
+if (environments.length > 0) {
+    runAudit(0);
+} else {
+    console.error("[ERROR] No environments with 'digital-' prefix found.");
+}
