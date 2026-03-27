@@ -35,7 +35,7 @@ async function runAuditor() {
     log(`Starting audit for ${environments.length} environments...`);
 
     for (const env of environments) {
-        log(`Processing Environment: ${env.label} (${env.id})`);
+        log(`Processing Environment: ${env.label}`);
         
         try {
             const listResponse = await new Promise((resolve, reject) => {
@@ -54,7 +54,7 @@ async function runAuditor() {
             log(`Found ${deployments.length} deployments in ${env.label}`);
 
             for (const dep of deployments) {
-                await new Promise(r => setTimeout(r, throttleMs)); // Throttling
+                await new Promise(r => setTimeout(r, throttleMs));
 
                 const detailResponse = await new Promise((resolve, reject) => {
                     pm.sendRequest({
@@ -88,25 +88,56 @@ async function runAuditor() {
 }
 
 function finalize() {
-    pm.collectionVariables.set("ch2_compare_debug", JSON.stringify({
+    // PRE-CALCULATE MATCH STATUS TO PREVENT HANDLEBARS ERRORS
+    const finalRows = Object.keys(rows).map(appName => {
+        const appData = rows[appName];
+        const baselineVersion = appData[baselineEnvKey]?.appVersion;
+        
+        const envDetails = environments.map(env => {
+            const current = appData[env.label];
+            let matchClass = "v-mismatch";
+            
+            if (!current) {
+                matchClass = "v-missing";
+            } else if (env.label === baselineEnvKey) {
+                matchClass = "v-baseline";
+            } else if (current.appVersion === baselineVersion) {
+                matchClass = "v-match";
+            }
+
+            return {
+                envLabel: env.label,
+                exists: !!current,
+                appVersion: current?.appVersion || "N/A",
+                runtimeVersion: current?.runtimeVersion || "N/A",
+                status: current?.status || "",
+                matchClass: matchClass
+            };
+        });
+
+        return { appName, envDetails };
+    });
+
+    const debugJsonStr = JSON.stringify({
         generatedAt: new Date().toISOString(),
-        environments,
         data: rows,
         logs: debugLog
-    }));
+    });
+
+    pm.collectionVariables.set("ch2_compare_debug", debugJsonStr);
 
     const visualizerData = {
-        rows,
+        finalRows,
         envs: environments.map(e => e.label),
         baseline: baselineEnvKey,
-        debugJson: pm.collectionVariables.get("ch2_compare_debug")
+        debugJson: debugJsonStr
     };
 
     pm.visualizer.set(template, visualizerData);
-    log("Audit Complete. Open Visualizer to view results.");
+    log("Audit Complete. Open Visualizer.");
 }
 
-// --- VISUALIZER HTML ---
+// --- VISUALIZER HTML + CSS + JS (INLINE) ---
 const template = `
 <!DOCTYPE html>
 <html>
@@ -123,84 +154,30 @@ const template = `
             --missing: #757575;
             --baseline: #0288D1;
         }
-        body { 
-            font-family: 'Roboto', sans-serif; 
-            margin: 0; 
-            background: var(--md-sys-color-surface);
-            width: 100vw;
-            overflow-x: hidden;
-        }
+        body { font-family: 'Roboto', sans-serif; margin: 0; background: var(--md-sys-color-surface); width: 100vw; }
         .top-bar {
-            background: #F3EDF7;
-            padding: 16px 24px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            position: sticky;
-            top: 0;
-            z-index: 100;
+            background: #F3EDF7; padding: 16px 24px; display: flex; justify-content: space-between;
+            align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); position: sticky; top: 0; z-index: 100;
         }
         .btn {
-            background: var(--md-sys-color-primary);
-            color: white;
-            border: none;
-            padding: 10px 24px;
-            border-radius: 20px;
-            cursor: pointer;
-            font-weight: 500;
-            margin-left: 8px;
-            transition: elevation 0.2s;
+            background: var(--md-sys-color-primary); color: white; border: none; padding: 10px 24px;
+            border-radius: 20px; cursor: pointer; font-weight: 500; margin-left: 8px;
         }
         .btn-secondary { background: var(--md-sys-color-outline); }
-        .card {
-            margin: 24px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.24);
-            overflow-x: auto;
-        }
+        .card { margin: 24px; background: white; border-radius: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.12); overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; min-width: 800px; }
-        th { 
-            background: #F3EDF7; 
-            text-align: left; 
-            padding: 16px; 
-            position: sticky; 
-            top: 0; 
-            font-weight: 500;
-            border-bottom: 1px solid var(--md-sys-color-outline);
-        }
+        th { background: #F3EDF7; text-align: left; padding: 16px; position: sticky; top: 0; border-bottom: 1px solid var(--md-sys-color-outline); }
         td { padding: 16px; border-bottom: 1px solid #E0E0E0; vertical-align: top; }
-        .status-chip {
-            padding: 4px 12px;
-            border-radius: 16px;
-            font-size: 11px;
-            font-weight: bold;
-            display: inline-block;
-            margin-top: 4px;
-        }
+        .status-chip { padding: 4px 12px; border-radius: 16px; font-size: 11px; font-weight: bold; display: inline-block; margin-top: 4px; }
         .v-match { color: var(--success); font-weight: bold; }
         .v-mismatch { color: var(--error); font-weight: bold; }
         .v-missing { color: var(--missing); font-style: italic; }
         .v-baseline { color: var(--baseline); font-weight: bold; }
-        
         #snackbar {
-            visibility: hidden;
-            min-width: 250px;
-            background-color: #322F35;
-            color: #F4EFF4;
-            text-align: center;
-            border-radius: 4px;
-            padding: 14px;
-            position: fixed;
-            z-index: 1000;
-            left: 50%;
-            bottom: 30px;
-            transform: translateX(-50%);
+            visibility: hidden; min-width: 250px; background-color: #322F35; color: #F4EFF4;
+            text-align: center; border-radius: 4px; padding: 14px; position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%);
         }
-        #snackbar.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
-        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 30px; opacity: 1;} }
-        @keyframes fadeout { from {bottom: 30px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+        #snackbar.show { visibility: visible; }
     </style>
 </head>
 <body>
@@ -223,20 +200,18 @@ const template = `
                 </tr>
             </thead>
             <tbody>
-                {{#each rows}}
+                {{#each finalRows}}
                 <tr>
-                    <td><strong>{{@key}}</strong></td>
-                    {{#each ../envs}}
+                    <td><strong>{{appName}}</strong></td>
+                    {{#each envDetails}}
                     <td>
-                        {{#with (lookup ../this this)}}
-                            <div class="{{#if (eq ../../this ../../../baseline)}}v-baseline{{else}}{{#if (eq appVersion (lookup (lookup ../../../rows @../../key) ../../../baseline).appVersion)}}v-match{{else}}v-mismatch{{/if}}{{/if}}">
-                                v{{appVersion}}
-                            </div>
+                        {{#if exists}}
+                            <div class="{{matchClass}}">v{{appVersion}}</div>
                             <div style="font-size: 12px; color: #666;">RT: {{runtimeVersion}}</div>
                             <span class="status-chip" style="background: #E8DEF8;">{{status}}</span>
                         {{else}}
                             <span class="v-missing">Not Deployed</span>
-                        {{/with}}
+                        {{/if}}
                     </td>
                     {{/each}}
                 </tr>
@@ -245,21 +220,21 @@ const template = `
         </table>
     </div>
 
-    <div id="snackbar">CSV copied to clipboard</div>
+    <div id="snackbar">Content copied to clipboard</div>
 
     <script>
         const data = pm.getData();
 
         function exportCSV() {
             let csv = "Application,Baseline," + data.envs.join(",") + "\\n";
-            Object.keys(data.rows).forEach(app => {
-                let row = [app];
-                let baselineVer = data.rows[app][data.baseline]?.appVersion || "N/A";
-                row.push(baselineVer);
-                data.envs.forEach(env => {
-                    row.push(data.rows[app][env]?.appVersion || "N/A");
-                });
-                csv += row.join(",") + "\\n";
+            data.finalRows.forEach(row => {
+                let csvRow = [row.appName];
+                // Find baseline version
+                let base = row.envDetails.find(e => e.envLabel === data.baseline);
+                csvRow.push(base ? base.appVersion : "N/A");
+                // Add all env versions
+                row.envDetails.forEach(e => csvRow.push(e.appVersion));
+                csv += csvRow.join(",") + "\\n";
             });
             copyToClipboard(csv);
         }
@@ -269,30 +244,21 @@ const template = `
         }
 
         function copyToClipboard(text) {
-            if (navigator.clipboard && navigator.clipboard.writeText) {
-                navigator.clipboard.writeText(text).then(() => showToast());
-            } else {
-                const textArea = document.createElement("textarea");
-                textArea.value = text;
-                document.body.appendChild(textArea);
-                textArea.select();
-                try {
-                    document.execCommand('copy');
-                    showToast();
-                } catch (err) {
-                    console.error('Fallback copy failed', err);
-                }
-                document.body.removeChild(textArea);
-            }
+            const textArea = document.createElement("textarea");
+            textArea.value = text;
+            document.body.appendChild(textArea);
+            textArea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textArea);
+            showToast();
         }
 
         function showToast() {
             const x = document.getElementById("snackbar");
             x.className = "show";
-            setTimeout(() => { x.className = x.className.replace("show", ""); }, 3000);
+            setTimeout(() => { x.className = ""; }, 3000);
         }
 
-        // Handlebars helper for comparison
         Handlebars.registerHelper('eq', function(a, b) { return a === b; });
     </script>
 </body>
