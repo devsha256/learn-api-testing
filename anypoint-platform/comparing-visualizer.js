@@ -140,84 +140,70 @@ function finalize() {
 // 5. VISUALIZER TEMPLATE
 const template = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
+    <meta charset="UTF-8">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
         :root {
             --md-sys-color-primary: #6750A4;
             --md-sys-color-surface: #FEF7FF;
-            --md-sys-color-surface-container: #F3EDF7;
             --md-sys-color-outline: #CAC4D0;
-            --md-sys-color-error: #B3261E;
             --md-sys-color-error-container: #FFDAD6;
-            --md-sys-color-success: #2E7D32;
         }
 
-        body, html { height: 100%; width: 100%; margin: 0; padding: 0; font-family: 'Roboto', sans-serif; overflow: hidden; }
+        /* 1. Viewport Fix: Force full height/width and remove all margins */
+        body, html { 
+            height: 100%; width: 100%; margin: 0; padding: 0; 
+            font-family: 'Roboto', sans-serif; background: var(--md-sys-color-surface); 
+            overflow: hidden; 
+        }
+
         .wrapper { display: flex; height: 100vh; width: 100vw; }
-        
+
+        /* Sidebar Nav */
         .sidebar {
-            width: 72px; background: var(--md-sys-color-surface-container);
-            border-right: 1px solid var(--md-sys-color-outline);
+            width: 72px; background: #F3EDF7; border-right: 1px solid var(--md-sys-color-outline);
             display: flex; flex-direction: column; align-items: center; padding-top: 16px; gap: 12px;
         }
         .nav-item { width: 48px; height: 48px; border-radius: 12px; display: flex; align-items: center; justify-content: center; cursor: pointer; color: #49454F; }
         .nav-item.active { background: #EADDFF; color: #21005D; }
 
-        .container { flex: 1; display: flex; flex-direction: column; overflow: hidden; width: 100%; }
+        .container { flex: 1; display: flex; flex-direction: column; height: 100vh; }
 
+        /* Header Fix: Consistent height, zero side gaps */
         .header {
-            padding: 8px 24px; background: var(--md-sys-color-surface);
-            border-bottom: 1px solid var(--md-sys-color-outline);
-            display: flex; align-items: center; justify-content: space-between;
+            padding: 8px 16px; background: white; border-bottom: 1px solid var(--md-sys-color-outline);
+            display: flex; align-items: center; gap: 20px; height: 56px; box-sizing: border-box;
         }
-        .controls-left { display: flex; align-items: center; gap: 32px; flex: 1; }
 
-        .search-bar {
-            background: #ECE6F0; border-radius: 28px; padding: 0 16px;
-            display: flex; align-items: center; width: 350px; height: 44px;
-        }
-        .search-bar input { border: none; background: transparent; outline: none; width: 100%; font-size: 15px; margin-left: 8px; }
-
-        /* M3 Toggle Switch */
-        .toggle-group { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 500; cursor: pointer; color: #49454F; }
-        .switch-box { position: relative; width: 52px; height: 32px; background: #79747E; border-radius: 16px; transition: 0.3s; }
-        .switch-box::after { content: ''; position: absolute; width: 24px; height: 24px; background: white; border-radius: 50%; top: 4px; left: 4px; transition: 0.3s; box-shadow: 0 1px 3px rgba(0,0,0,0.2); }
-        #mismatchToggle:checked + .switch-box { background: var(--md-sys-color-primary); }
-        #mismatchToggle:checked + .switch-box::after { left: 24px; }
-
-        /* Full Viewport Table */
+        .search-bar { background: #ECE6F0; border-radius: 28px; padding: 0 16px; display: flex; align-items: center; flex: 1; max-width: 400px; height: 40px; }
+        .search-bar input { border: none; background: transparent; outline: none; width: 100%; font-size: 14px; }
+        
+        /* 2. Unused Space Fix: Table area takes all remaining height */
         .table-area { flex: 1; overflow: auto; background: white; width: 100%; }
         table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+        
         th { 
             position: sticky; top: 0; background: #F7F2FA; z-index: 10;
-            padding: 14px 24px; text-align: left; font-size: 12px; color: #49454F;
+            padding: 12px; text-align: left; font-size: 12px; color: #49454F;
             border-bottom: 2px solid var(--md-sys-color-outline);
         }
         
-        td { padding: 14px 24px; border-bottom: 1px solid #E7E0EC; }
-        .index-col { width: 60px; color: #999; font-size: 12px; font-weight: 500; }
-        .app-name-col { width: 30%; font-weight: 500; font-size: 15px; color: #1D1B20; }
+        /* 3. Index Column: Centered alignment */
+        .col-index { width: 50px; text-align: center !important; color: #938F99; font-size: 11px; }
+        .col-name { width: 35%; }
 
-        tr.mismatch-row { background-color: var(--md-sys-color-error-container) !important; }
-        tr.mismatch-row:hover { background-color: #FFCFCC !important; }
-        
-        .v-match { color: var(--md-sys-color-success); font-weight: 700; }
-        .v-mismatch { color: var(--md-sys-color-error); font-weight: 900; text-decoration: underline; }
-        .v-baseline { color: #0061A4; font-weight: 700; }
+        td { padding: 12px; border-bottom: 1px solid #E7E0EC; vertical-align: middle; }
 
-        .btn-fab {
-            background: var(--md-sys-color-primary); color: white; border: none;
-            padding: 10px 24px; border-radius: 16px; display: flex; align-items: center; gap: 8px;
-            font-weight: 500; cursor: pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
+        tr.mismatch-row { background-color: var(--md-sys-color-error-container); }
+        .v-match { color: #2E7D32; font-weight: 700; }
+        .v-mismatch { color: #B3261E; font-weight: 900; text-decoration: underline; }
 
-        #snackbar {
-            visibility: hidden; min-width: 200px; background: #322F35; color: white;
-            padding: 14px 24px; position: fixed; bottom: 24px; left: 96px; border-radius: 4px; z-index: 1000;
-        }
+        .btn-fab { background: var(--md-sys-color-primary); color: white; border: none; padding: 8px 16px; border-radius: 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; }
+
+        #snackbar { visibility: hidden; min-width: 200px; background: #322F35; color: white; padding: 12px; position: fixed; bottom: 20px; left: 88px; border-radius: 4px; }
         #snackbar.show { visibility: visible; }
         #csvFallback { position: absolute; left: -9999px; }
     </style>
@@ -231,19 +217,18 @@ const template = `
 
         <main class="container">
             <header class="header">
-                <div class="controls-left">
-                    <div class="search-bar">
-                        <span class="material-icons" style="color:#49454F">search</span>
-                        <input type="text" id="searchInput" onkeyup="filterTable()" placeholder="Search apps...">
-                    </div>
-                    <label class="toggle-group">
-                        <input type="checkbox" id="mismatchToggle" onchange="filterTable()" style="display:none">
-                        <div class="switch-box"></div>
-                        <span>Show Mismatches Only</span>
-                    </label>
+                <div class="search-bar">
+                    <span class="material-icons" style="font-size:20px">search</span>
+                    <input type="text" id="searchInput" onkeyup="updateFilters()" placeholder="Search apps...">
                 </div>
+                
+                <div style="display:flex; align-items:center; gap:8px; font-size:13px;">
+                    <span>Mismatches Only</span>
+                    <input type="checkbox" id="mismatchToggle" onchange="updateFilters()">
+                </div>
+
                 <button class="btn-fab" id="copyCsvBtn">
-                    <span class="material-icons">download</span> Copy CSV
+                    <span class="material-icons">content_copy</span> Copy CSV
                 </button>
             </header>
 
@@ -251,25 +236,25 @@ const template = `
                 <table id="auditTable">
                     <thead>
                         <tr>
-                            <th class="index-col">#</th>
-                            <th class="app-name-col">Application Name</th>
+                            <th class="col-index">#</th>
+                            <th class="col-name">Application Name</th>
                             {{#each envs}}
                             <th>{{this}}</th>
                             {{/each}}
                         </tr>
                     </thead>
-                    <tbody>
+                    <tbody id="tableBody">
                         {{#each finalRows}}
                         <tr class="app-row {{#if isMismatch}}mismatch-row{{/if}}" data-name="{{appName}}" data-mismatch="{{isMismatch}}">
-                            <td class="index-col">{{index}}</td>
-                            <td class="app-name-col">{{appName}}</td>
+                            <td class="row-index col-index"></td>
+                            <td><strong>{{appName}}</strong></td>
                             {{#each envDetails}}
                             <td>
                                 {{#if exists}}
                                     <div class="{{matchClass}}">v{{appVersion}}</div>
-                                    <div style="font-size:10px; color:#555">RT: {{runtimeVersion}}</div>
+                                    <div style="font-size:10px; color:#444">RT: {{runtimeVersion}}</div>
                                 {{else}}
-                                    <span style="color:#AAA; font-style:italic">---</span>
+                                    <span style="color:#999">---</span>
                                 {{/if}}
                             </td>
                             {{/each}}
@@ -282,57 +267,59 @@ const template = `
     </div>
 
     <textarea id="csvFallback"></textarea>
-    <div id="snackbar">Content Copied</div>
+    <div id="snackbar">CSV Copied</div>
 
     <script>
         const d = pm.getData();
-        const snack = document.getElementById('snackbar');
 
-        function toast(msg) {
-            snack.textContent = msg;
-            snack.classList.add('show');
-            setTimeout(() => snack.classList.remove('show'), 2500);
+        // 4. Dynamic Indexing: Recalculate IDs based on what is visible
+        function updateFilters() {
+            const query = document.getElementById('searchInput').value.toLowerCase();
+            const showOnlyMismatches = document.getElementById('mismatchToggle').checked;
+            const rows = document.querySelectorAll('.app-row');
+            let visibleCount = 0;
+
+            rows.forEach(row => {
+                const name = row.getAttribute('data-name').toLowerCase();
+                const isMismatch = row.getAttribute('data-mismatch') === 'true';
+                
+                const matchesSearch = name.includes(query);
+                const matchesToggle = !showOnlyMismatches || isMismatch;
+
+                if (matchesSearch && matchesToggle) {
+                    row.style.display = '';
+                    visibleCount++;
+                    row.querySelector('.row-index').textContent = visibleCount;
+                } else {
+                    row.style.display = 'none';
+                }
+            });
         }
 
-        async function copyToClipboard(text) {
-            try {
-                if (navigator.clipboard && navigator.clipboard.writeText) {
-                    await navigator.clipboard.writeText(text);
-                    return true;
-                }
-            } catch (err) {}
-            
+        async function copyText(text) {
             const ta = document.getElementById('csvFallback');
             ta.value = text;
-            ta.focus(); ta.select();
-            const ok = document.execCommand('copy');
-            ta.blur();
-            return !!ok;
+            ta.select();
+            document.execCommand('copy');
+            const x = document.getElementById("snackbar");
+            x.className = "show";
+            setTimeout(() => x.className = "", 2000);
         }
 
-        document.getElementById('copyCsvBtn').addEventListener('click', async () => {
-            let csv = "Index,App,Baseline," + d.envs.join(",") + "\\n";
+        document.getElementById('copyCsvBtn').addEventListener('click', () => {
+            let csv = "App,Baseline," + d.envs.join(",") + "\\n";
             d.finalRows.forEach(r => {
-                let row = [r.index, r.appName];
+                let row = [r.appName];
                 let b = r.envDetails.find(e => e.envLabel === d.baseline);
                 row.push(b ? b.appVersion : "N/A");
                 r.envDetails.forEach(e => row.push(e.appVersion));
                 csv += row.join(",") + "\\n";
             });
-            const success = await copyToClipboard(csv);
-            toast(success ? 'CSV report copied' : 'Copy failed');
+            copyText(csv);
         });
 
-        function filterTable() {
-            const query = document.getElementById('searchInput').value.toLowerCase();
-            const onlyMismatches = document.getElementById('mismatchToggle').checked;
-            
-            document.querySelectorAll('.app-row').forEach(row => {
-                const name = row.getAttribute('data-name').toLowerCase();
-                const isMismatch = row.getAttribute('data-mismatch') === 'true';
-                row.style.display = (name.includes(query) && (!onlyMismatches || isMismatch)) ? '' : 'none';
-            });
-        }
+        // Initialize Index on load
+        updateFilters();
     </script>
 </body>
 </html>
