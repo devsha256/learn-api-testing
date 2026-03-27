@@ -1,133 +1,146 @@
-// --- 1. CONFIGURATION & DISCOVERY ---
+/**
+ * MULESOFT CLOUDHUB 2.0 DEPLOYMENT AUDITOR
+ * Logic: Recursive Serial Execution (Postman Sandbox Compatible)
+ * UI: Google Material Design 3 (High Contrast Edition)
+ */
+
+// 1. CONFIGURATION & DISCOVERY
 const token = pm.collectionVariables.get("token");
 const orgId = pm.collectionVariables.get("orgId");
 const baselineEnvKey = pm.collectionVariables.get("baselineEnv") || "dev";
-const throttleMs = parseInt(pm.collectionVariables.get("throttleMs")) || 120;
+const throttleMs = parseInt(pm.collectionVariables.get("throttleMs")) || 150;
 
 const rows = {};
 const allVars = pm.collectionVariables.toObject();
 
-// Discover "digital-" prefixed environment variables
+// Discover digital-* variables
 const environments = Object.keys(allVars)
     .filter(key => key.startsWith("digital-"))
-    .map(key => ({
-        label: key.replace("digital-", ""),
-        id: allVars[key]
+    .map(key => ({ 
+        label: key.replace("digital-", ""), 
+        id: allVars[key] 
     }));
 
-// --- 2. LOGIC HELPERS ---
+console.log(`[START] Audit initiated for ${environments.length} environments.`);
+
+// 2. HELPER: NAME NORMALIZATION
 function normalizeAppName(name) {
     const parts = name.split("-");
-    // Standard Rule: strip the last token (the env suffix)
     return parts.length > 1 ? parts.slice(0, -1).join("-") : name;
 }
 
-// --- 3. RECURSIVE API ENGINE (SANDBOX STABLE) ---
-function runAudit(envIdx) {
-    if (envIdx >= environments.length) {
+// 3. SERIAL EXECUTION ENGINE
+function processEnvironment(index) {
+    if (index >= environments.length) {
         finalize();
         return;
     }
 
-    const env = environments[envIdx];
-    console.log(`[AUDIT] Fetching ${env.label}...`);
+    const env = environments[index];
+    console.log(`[FETCH] Accessing: ${env.label}`);
 
-    const listReq = {
+    const listOptions = {
         url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments`,
         method: 'GET',
-        header: { 
-            'Authorization': `Bearer ${token}`, 
-            'X-ANYPNT-ORG-ID': orgId, 
-            'X-ANYPNT-ENV-ID': env.id 
+        header: {
+            'Authorization': `Bearer ${token}`,
+            'X-ANYPNT-ORG-ID': orgId,
+            'X-ANYPNT-ENV-ID': env.id
         }
     };
 
-    pm.sendRequest(listReq, (err, res) => {
+    pm.sendRequest(listOptions, (err, res) => {
         if (err || res.code !== 200) {
-            console.error(`[SKIP] ${env.label} failed.`);
-            runAudit(envIdx + 1);
+            console.error(`[ERROR] Environment ${env.label} unreachable or unauthorized.`);
+            processEnvironment(index + 1);
             return;
         }
 
-        const items = res.json().items || [];
-        processDetails(env, items, 0, () => runAudit(envIdx + 1));
+        const deployments = res.json().items || [];
+        processDeployments(env, deployments, 0, () => {
+            processEnvironment(index + 1);
+        });
     });
 }
 
-function processDetails(env, list, itemIdx, onComplete) {
-    if (itemIdx >= list.length) {
+function processDeployments(env, list, depIndex, onComplete) {
+    if (depIndex >= list.length) {
         onComplete();
         return;
     }
 
-    const dep = list[itemIdx];
-    const detailReq = {
+    const dep = list[depIndex];
+    const detailOptions = {
         url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments/${dep.id}`,
         method: 'GET',
-        header: { 
-            'Authorization': `Bearer ${token}`, 
-            'X-ANYPNT-ORG-ID': orgId, 
-            'X-ANYPNT-ENV-ID': env.id 
+        header: {
+            'Authorization': `Bearer ${token}`,
+            'X-ANYPNT-ORG-ID': orgId,
+            'X-ANYPNT-ENV-ID': env.id
         }
     };
 
     setTimeout(() => {
-        pm.sendRequest(detailReq, (err, res) => {
+        pm.sendRequest(detailOptions, (err, res) => {
             if (!err && res.code === 200) {
-                const d = res.json();
-                const cleanName = normalizeAppName(d.name);
-                
-                if (!rows[cleanName]) rows[cleanName] = {};
-                rows[cleanName][env.label] = {
-                    v: d.application?.ref?.version || "N/A",
-                    rt: d.runtimeVersion || "N/A",
-                    status: d.status || "UNKNOWN"
+                const data = res.json();
+                const normName = normalizeAppName(data.name);
+
+                if (!rows[normName]) rows[normName] = {};
+                rows[normName][env.label] = {
+                    appVersion: data.application?.ref?.version || "N/A",
+                    runtimeVersion: data.runtimeVersion || "N/A",
+                    status: data.status || "UNKNOWN"
                 };
             }
-            processDetails(env, list, itemIdx + 1, onComplete);
+            processDeployments(env, list, depIndex + 1, onComplete);
         });
     }, throttleMs);
 }
 
-// --- 4. FINALIZER & MISMATCH ENGINE ---
+// 4. FINALIZER
 function finalize() {
-    const finalRows = Object.keys(rows).map(name => {
-        const appData = rows[name];
-        const baseVer = appData[baselineEnvKey]?.v;
-        let rowMismatch = false;
-
+    const finalRows = Object.keys(rows).map(appName => {
+        const appData = rows[appName];
+        const baseVer = appData[baselineEnvKey]?.appVersion;
+        let rowHasMismatch = false;
+        
         const envDetails = environments.map(env => {
             const cur = appData[env.label];
-            let css = "v-match";
+            let mClass = "v-mismatch";
             
-            if (!cur) css = "v-missing";
-            else if (env.label === baselineEnvKey) css = "v-baseline";
-            else if (cur.v !== baseVer) {
-                css = "v-mismatch";
-                rowMismatch = true; // Flag row for toggle
+            if (!cur) {
+                mClass = "v-missing";
+            } else if (env.label === baselineEnvKey) {
+                mClass = "v-baseline";
+            } else if (cur.appVersion === baseVer) {
+                mClass = "v-match";
+            } else {
+                rowHasMismatch = true; // Flag for high-contrast row highlighting
             }
 
             return { 
-                label: env.label, 
-                v: cur?.v || "N/A", 
-                rt: cur?.rt || "N/A", 
+                envLabel: env.label, 
+                exists: !!cur, 
+                appVersion: cur?.appVersion || "N/A", 
+                runtimeVersion: cur?.runtimeVersion || "N/A", 
                 status: cur?.status || "", 
-                css 
+                matchClass: mClass 
             };
         });
 
-        return { name, envDetails, rowMismatch };
+        return { appName, envDetails, isMismatch: rowHasMismatch };
     });
 
     pm.visualizer.set(template, {
-        finalRows,
+        finalRows, 
         envs: environments.map(e => e.label),
         baseline: baselineEnvKey
     });
-    console.log("[COMPLETE] Audit finished.");
+    console.log("[COMPLETE] Visualizer updated with audit results.");
 }
 
-// --- 5. VISUALIZER TEMPLATE (MATERIAL 3) ---
+// 5. VISUALIZER TEMPLATE
 const template = `
 <!DOCTYPE html>
 <html lang="en">
@@ -141,26 +154,20 @@ const template = `
             --md-sys-color-surface: #FEF7FF;
             --md-sys-color-surface-container: #F3EDF7;
             --md-sys-color-outline: #CAC4D0;
-            --md-sys-color-error: #B3261E; /* Material Red 40 */
-            --md-sys-color-error-container: #FFDAD6; /* Material Red 90 */
+            --md-sys-color-error: #B3261E;
+            --md-sys-color-error-container: #FFDAD6;
             --md-sys-color-success: #2E7D32;
         }
 
-        /* 1. Viewport Fix: Zero margins/padding to capture full screen */
-        body, html { 
-            height: 100%; width: 100%; margin: 0; padding: 0; 
-            font-family: 'Roboto', sans-serif; background: var(--md-sys-color-surface); 
-            overflow: hidden;
-        }
-
+        body, html { height: 100%; width: 100%; margin: 0; padding: 0; font-family: 'Roboto', sans-serif; overflow: hidden; }
         .wrapper { display: flex; height: 100vh; width: 100vw; }
-
+        
+        /* Sidebar */
         .sidebar {
             width: 72px; background: var(--md-sys-color-surface-container);
             border-right: 1px solid var(--md-sys-color-outline);
             display: flex; flex-direction: column; align-items: center; padding-top: 16px; gap: 12px;
         }
-
         .nav-item {
             width: 48px; height: 48px; border-radius: 12px;
             display: flex; align-items: center; justify-content: center;
@@ -170,19 +177,19 @@ const template = `
 
         .container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
 
+        /* Header Controls */
         .header {
             padding: 8px 16px; background: var(--md-sys-color-surface);
             border-bottom: 1px solid var(--md-sys-color-outline);
             display: flex; align-items: center; gap: 16px;
         }
-
         .search-bar {
             background: #ECE6F0; border-radius: 28px; padding: 0 16px;
-            display: flex; align-items: center; flex: 1; max-width: 300px; height: 40px;
+            display: flex; align-items: center; flex: 1; max-width: 350px; height: 40px;
         }
-        .search-bar input { border: none; background: transparent; outline: none; width: 100%; }
+        .search-bar input { border: none; background: transparent; outline: none; width: 100%; font-size: 14px; }
 
-        /* 2. Padding Fix: Table area takes full width */
+        /* Table Area */
         .table-area { flex: 1; overflow: auto; background: white; }
         table { width: 100%; border-collapse: collapse; table-layout: fixed; }
         th { 
@@ -190,16 +197,16 @@ const template = `
             padding: 12px 16px; text-align: left; font-size: 12px; color: #49454F;
             border-bottom: 2px solid var(--md-sys-color-outline);
         }
-        td { padding: 12px 16px; border-bottom: 1px solid #E7E0EC; word-break: break-all; }
+        td { padding: 12px 16px; border-bottom: 1px solid #E7E0EC; }
 
-        /* 3. Contrast Fix: Stronger Highlighting for Mismatches */
+        /* Mismatch Highlighting */
         tr.mismatch-row { background-color: var(--md-sys-color-error-container) !important; }
         tr.mismatch-row td { border-bottom: 1px solid #F9AFAF; }
-        tr.mismatch-row:hover { background-color: #FFCFCC !important; }
         
         .v-match { color: var(--md-sys-color-success); font-weight: 700; }
         .v-mismatch { color: var(--md-sys-color-error); font-weight: 900; text-decoration: underline; }
         .v-baseline { color: #0061A4; font-weight: 700; }
+        .v-missing { color: #999; font-style: italic; }
 
         .btn-fab {
             background: var(--md-sys-color-primary); color: white; border: none;
@@ -213,21 +220,20 @@ const template = `
         }
         #snackbar.show { visibility: visible; }
         
-        /* Fallback textarea for copy */
-        #csvFallback { position: absolute; left: -9999px; top: 0; }
+        #csvFallback { position: absolute; left: -9999px; }
     </style>
 </head>
 <body>
     <div class="wrapper">
         <nav class="sidebar">
-            <div class="nav-item active" onclick="switchTab('audit', this)"><span class="material-icons">fact_check</span></div>
-            <div class="nav-item" onclick="switchTab('stats', this)"><span class="material-icons">insights</span></div>
+            <div class="nav-item active"><span class="material-icons">fact_check</span></div>
+            <div class="nav-item"><span class="material-icons">insights</span></div>
         </nav>
 
         <main class="container">
             <header class="header">
                 <div class="search-bar">
-                    <span class="material-icons" style="font-size:20px">search</span>
+                    <span class="material-icons" style="font-size:20px; color:#49454F">search</span>
                     <input type="text" id="searchInput" onkeyup="filterTable()" placeholder="Search apps...">
                 </div>
                 <button class="btn-fab" id="copyCsvBtn">
@@ -235,36 +241,35 @@ const template = `
                 </button>
             </header>
 
-            <div id="audit" class="tab-content">
-                <div class="table-area">
-                    <table id="auditTable">
-                        <thead>
-                            <tr>
-                                <th style="width: 30%;">App Name</th>
-                                {{#each envs}}
-                                <th>{{this}}</th>
-                                {{/each}}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {{#each finalRows}}
-                            <tr class="app-row {{#if isMismatch}}mismatch-row{{/if}}" data-name="{{appName}}" data-mismatch="{{isMismatch}}">
-                                <td><strong>{{appName}}</strong></td>
-                                {{#each envDetails}}
-                                <td>
-                                    {{#if exists}}
-                                        <div class="{{matchClass}}">v{{appVersion}}</div>
-                                        <div style="font-size:10px; color:#444">RT: {{runtimeVersion}}</div>
-                                    {{else}}
-                                        <span style="color:#999">---</span>
-                                    {{/if}}
-                                </td>
-                                {{/each}}
-                            </tr>
+            <div class="table-area">
+                <table id="auditTable">
+                    <thead>
+                        <tr>
+                            <th style="width: 25%;">App Name</th>
+                            {{#each envs}}
+                            <th>{{this}}</th>
                             {{/each}}
-                        </tbody>
-                    </table>
-                </div>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{#each finalRows}}
+                        <tr class="app-row {{#if isMismatch}}mismatch-row{{/if}}" data-name="{{appName}}">
+                            <td><strong>{{appName}}</strong></td>
+                            {{#each envDetails}}
+                            <td>
+                                {{#if exists}}
+                                    <div class="{{matchClass}}">v{{appVersion}}</div>
+                                    <div style="font-size:10px; color:#444">RT: {{runtimeVersion}}</div>
+                                    <div style="font-size:9px; color:#666; font-weight:500">{{status}}</div>
+                                {{else}}
+                                    <span class="v-missing">---</span>
+                                {{/if}}
+                            </td>
+                            {{/each}}
+                        </tr>
+                        {{/each}}
+                    </tbody>
+                </table>
             </div>
         </main>
     </div>
@@ -279,7 +284,7 @@ const template = `
         function toast(msg) {
             snack.textContent = msg;
             snack.classList.add('show');
-            setTimeout(() => snack.classList.remove('show'), 1800);
+            setTimeout(() => snack.classList.remove('show'), 2000);
         }
 
         async function copyText(text) {
@@ -288,19 +293,16 @@ const template = `
                     await navigator.clipboard.writeText(text);
                     return true;
                 }
-            } catch (e) { /* fall through */ }
+            } catch (e) { }
 
             try {
                 const ta = document.getElementById('csvFallback');
                 ta.value = text;
-                ta.focus();
-                ta.select();
+                ta.focus(); ta.select();
                 const ok = document.execCommand('copy');
                 ta.blur();
                 return !!ok;
-            } catch (e) {
-                return false;
-            }
+            } catch (e) { return false; }
         }
 
         document.getElementById('copyCsvBtn').addEventListener('click', async () => {
@@ -312,9 +314,8 @@ const template = `
                 r.envDetails.forEach(e => row.push(e.appVersion));
                 csv += row.join(",") + "\\n";
             });
-            
             const ok = await copyText(csv);
-            toast(ok ? 'CSV copied to clipboard' : 'Copy failed (clipboard blocked)');
+            toast(ok ? 'CSV copied to clipboard' : 'Copy failed');
         });
 
         function filterTable() {
@@ -324,15 +325,10 @@ const template = `
                 row.style.display = name.includes(query) ? '' : 'none';
             });
         }
-        
-        function switchTab(tabId, el) {
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            el.classList.add('active');
-            // Logic to toggle content could go here
-        }
     </script>
 </body>
 </html>
 `;
 
-runAudit(0);
+// 6. START EXECUTION
+processEnvironment(0);
