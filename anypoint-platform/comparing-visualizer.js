@@ -296,6 +296,7 @@ const template = `
     <div id="snackbar">Content copied to clipboard</div>
 
     <script>
+        Handlebars.registerHelper('eq', function (a, b) { return a === b; });
         const d = pm.getData();
         function copyCSV() {
             let csv = "App,Baseline," + d.envs.join(",") + "\\n";
