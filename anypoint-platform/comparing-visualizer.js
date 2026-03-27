@@ -120,28 +120,181 @@ function finalize() {
 
 // 5. TEMPLATE (The visual layer)
 const template = `
-<!DOCTYPE html><html><head>
-<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
-<style>
-    body { font-family: 'Roboto', sans-serif; background: #FEF7FF; padding: 20px; }
-    .card { background: white; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); overflow: auto; }
-    table { width: 100%; border-collapse: collapse; }
-    th { background: #F3EDF7; padding: 12px; text-align: left; border-bottom: 2px solid #79747E; }
-    td { padding: 12px; border-bottom: 1px solid #EEE; vertical-align: top; }
-    .v-match { color: #2E7D32; font-weight: bold; }
-    .v-mismatch { color: #B3261E; font-weight: bold; }
-    .v-baseline { color: #0288D1; font-weight: bold; }
-    .status-chip { font-size: 10px; background: #E8DEF8; padding: 2px 6px; border-radius: 10px; }
-</style>
-</head><body>
-    <div style="margin-bottom:10px">
-        <button onclick="copyCSV()">Copy CSV</button>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+        :root {
+            --md-sys-color-primary: #6750A4;
+            --md-sys-color-on-primary: #FFFFFF;
+            --md-sys-color-surface: #FEF7FF;
+            --md-sys-color-surface-container: #F3EDF7;
+            --md-sys-color-outline: #79747E;
+            --md-sys-color-error: #B3261E;
+            --md-sys-color-success: #2E7D32;
+            --md-sys-color-baseline: #0061A4;
+        }
+
+        body {
+            font-family: 'Roboto', sans-serif;
+            background-color: var(--md-sys-color-surface);
+            color: #1C1B1F;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* Top Bar - M3 Elevation 2 */
+        .top-app-bar {
+            background-color: var(--md-sys-color-surface-container);
+            padding: 12px 24px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0px 2px 4px rgba(0, 0, 0, 0.05);
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        .title { font-size: 22px; font-weight: 400; color: #1C1B1F; }
+
+        /* Buttons - M3 Tonal Button Style */
+        .btn-container { display: flex; gap: 8px; }
+        .btn {
+            background-color: var(--md-sys-color-primary);
+            color: var(--md-sys-color-on-primary);
+            border: none;
+            padding: 10px 24px;
+            border-radius: 20px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: box-shadow 0.2s;
+        }
+        .btn:hover { box-shadow: 0px 1px 3px rgba(0,0,0,0.3); }
+        .btn-secondary { background-color: #EADDFF; color: #21005D; }
+
+        /* Table Card - M3 Elevated */
+        .main-content { padding: 24px; overflow-x: auto; }
+        .data-card {
+            background: #FFFFFF;
+            border-radius: 16px;
+            border: 1px solid #CAC4D0;
+            overflow: hidden;
+        }
+
+        table { width: 100%; border-collapse: collapse; min-width: 900px; }
+        
+        th {
+            background-color: var(--md-sys-color-surface-container);
+            padding: 16px;
+            text-align: left;
+            font-weight: 700;
+            font-size: 14px;
+            letter-spacing: 0.1px;
+            color: #49454F;
+            border-bottom: 1px solid var(--md-sys-color-outline);
+        }
+
+        td {
+            padding: 16px;
+            border-bottom: 1px solid #E7E0EC;
+            vertical-align: middle;
+        }
+
+        tr:last-child td { border-bottom: none; }
+        tr:hover { background-color: #F7F2FA; }
+
+        /* Version Chips & Typography */
+        .app-name { font-weight: 500; color: #1D1B20; font-size: 15px; }
+        .version-text { font-size: 16px; margin-bottom: 2px; }
+        
+        .v-match { color: var(--md-sys-color-success); font-weight: 700; }
+        .v-mismatch { color: var(--md-sys-color-error); font-weight: 700; }
+        .v-baseline { color: var(--md-sys-color-baseline); font-weight: 700; }
+        .v-missing { color: #938F99; font-style: italic; font-size: 13px; }
+
+        .rt-text { font-size: 11px; color: #49454F; text-transform: uppercase; letter-spacing: 0.5px; }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            padding: 4px 12px;
+            background-color: #E8DEF8;
+            color: #1D192B;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 500;
+            margin-top: 6px;
+        }
+
+        /* Snackbar */
+        #snackbar {
+            visibility: hidden; min-width: 250px; background-color: #322F35; color: #F4EFF4;
+            text-align: left; border-radius: 4px; padding: 14px 24px; position: fixed;
+            left: 24px; bottom: 24px; z-index: 1000; box-shadow: 0 3px 5px rgba(0,0,0,0.3);
+        }
+        #snackbar.show { visibility: visible; animation: fadein 0.5s, fadeout 0.5s 2.5s; }
+        @keyframes fadein { from {bottom: 0; opacity: 0;} to {bottom: 24px; opacity: 1;} }
+        @keyframes fadeout { from {bottom: 24px; opacity: 1;} to {bottom: 0; opacity: 0;} }
+    </style>
+</head>
+<body>
+    <div class="top-app-bar">
+        <div class="title">CH2.0 Deployment Auditor</div>
+        <div class="btn-container">
+            <button class="btn btn-secondary" onclick="copyDebug()">
+                <span class="material-icons">bug_report</span> Debug JSON
+            </button>
+            <button class="btn" onclick="copyCSV()">
+                <span class="material-icons">content_copy</span> Copy CSV
+            </button>
+        </div>
     </div>
-    <div class="card"><table><thead><tr><th>App Name</th>{{#each envs}}<th>{{this}}</th>{{/each}}</tr></thead>
-    <tbody>{{#each finalRows}}<tr><td><strong>{{appName}}</strong></td>{{#each envDetails}}<td>
-    {{#if exists}}<div class="{{matchClass}}">v{{appVersion}}</div><div style="font-size:11px">RT: {{runtimeVersion}}</div>
-    <span class="status-chip">{{status}}</span>{{else}}<span style="color:#757575">---</span>{{/if}}</td>{{/each}}</tr>{{/each}}
-    </tbody></table></div>
+
+    <div class="main-content">
+        <div class="data-card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Application</th>
+                        {{#each envs}}
+                        <th>{{this}} {{#if (eq this ../baseline)}}(Baseline){{/if}}</th>
+                        {{/each}}
+                    </tr>
+                </thead>
+                <tbody>
+                    {{#each finalRows}}
+                    <tr>
+                        <td><div class="app-name">{{appName}}</div></td>
+                        {{#each envDetails}}
+                        <td>
+                            {{#if exists}}
+                                <div class="version-text {{matchClass}}">v{{appVersion}}</div>
+                                <div class="rt-text">RT: {{runtimeVersion}}</div>
+                                <div class="status-badge">{{status}}</div>
+                            {{else}}
+                                <span class="v-missing">Not Deployed</span>
+                            {{/if}}
+                        </td>
+                        {{/each}}
+                    </tr>
+                    {{/each}}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div id="snackbar">Content copied to clipboard</div>
+
     <script>
         const d = pm.getData();
         function copyCSV() {
@@ -153,10 +306,23 @@ const template = `
                 r.envDetails.forEach(e => row.push(e.appVersion));
                 csv += row.join(",") + "\\n";
             });
-            navigator.clipboard.writeText(csv).then(() => alert("CSV Copied"));
+            navigator.clipboard.writeText(csv).then(() => showToast("CSV Copied to Clipboard"));
+        }
+
+        function copyDebug() {
+            navigator.clipboard.writeText(d.debugJson).then(() => showToast("Debug JSON Copied"));
+        }
+
+        function showToast(msg) {
+            const x = document.getElementById("snackbar");
+            x.innerText = msg;
+            x.className = "show";
+            setTimeout(() => { x.className = ""; }, 3000);
         }
     </script>
-</body></html>`;
+</body>
+</html>
+`;
 
 // START THE RECURSION
 processEnvironment(0);
