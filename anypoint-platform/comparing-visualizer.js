@@ -1,128 +1,112 @@
-/**
- * MULESOFT CH2.0 DEPLOYMENT AUDITOR
- * FIXED: Uses 'envPrefix' collection variable for discovery.
- * FIXED: Full viewport Material 3 UI.
- * FIXED: Robust Copy to Clipboard.
- */
-
-// 1. --- CONFIGURATION & DYNAMIC DISCOVERY ---
+// 1. DYNAMIC CONFIGURATION
 const token = pm.collectionVariables.get("token");
 const orgId = pm.collectionVariables.get("orgId");
-const baselineEnvKey = pm.collectionVariables.get("baselineEnv") || "dev";
-const envPrefix = pm.collectionVariables.get("envPrefix"); // e.g., "Retail-Digital"
+const envPrefix = pm.collectionVariables.get("envPrefix"); // e.g., "retail-digital"
+const baselineEnvKey = pm.collectionVariables.get("baselineEnv") || "preprod"; // Full key name from your image
 const throttleMs = parseInt(pm.collectionVariables.get("throttleMs")) || 150;
 
-if (!envPrefix) {
-    console.error("[CRITICAL] 'envPrefix' variable is missing from the collection.");
-}
-
 const rows = {};
-const allVars = pm.collectionVariables.toObject();
+const debugLog = [];
 
-// Identify environments ONLY if they start with the user-defined envPrefix
+// 2. DYNAMIC DISCOVERY: Find all vars starting with your prefix
+const allVars = pm.collectionVariables.toObject();
 const environments = Object.keys(allVars)
-    .filter(key => key.startsWith(envPrefix))
+    .filter(key => key.startsWith(envPrefix + "-"))
     .map(key => ({
-        label: key.replace(envPrefix + "-", ""), // e.g., "Retail-Digital-Dev" -> "Dev"
-        id: allVars[key],
-        rawKey: key
+        label: key, // Keep full name (e.g., retail-digital-dev)
+        id: allVars[key]
     }));
 
-console.log(`[START] Found ${environments.length} environments matching prefix: ${envPrefix}`);
+function log(msg) {
+    const ts = new Date().toISOString().split('T')[1].split('Z')[0];
+    console.log(`[${ts}] ${msg}`);
+    debugLog.push(`${ts}: ${msg}`);
+}
 
-// 2. --- EXECUTION ENGINE ---
-function runAudit(envIndex) {
-    if (envIndex >= environments.length) {
+function normalizeAppName(name) {
+    const parts = name.split("-");
+    return parts.length > 1 ? parts.slice(0, -1).join("-") : name;
+}
+
+// 3. RECURSIVE SERIAL ENGINE (Postman Sandbox Compatible)
+function startAudit(index) {
+    if (index >= environments.length) {
         finalize();
         return;
     }
 
-    const env = environments[envIndex];
-    const listOptions = {
+    const env = environments[index];
+    log(`Auditing: ${env.label}`);
+
+    pm.sendRequest({
         url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments`,
         method: 'GET',
-        header: {
-            'Authorization': `Bearer ${token}`,
-            'X-ANYPNT-ORG-ID': orgId,
-            'X-ANYPNT-ENV-ID': env.id
-        }
-    };
-
-    pm.sendRequest(listOptions, (err, res) => {
+        header: { 'Authorization': `Bearer ${token}`, 'X-ANYPNT-ORG-ID': orgId, 'X-ANYPNT-ENV-ID': env.id }
+    }, (err, res) => {
         if (err || res.code !== 200) {
-            console.error(`[SKIP] Error fetching ${env.label}`);
-            runAudit(envIndex + 1);
+            log(`Error in ${env.label}: ${res ? res.code : 'No Response'}`);
+            startAudit(index + 1);
             return;
         }
-        processApps(env, res.json().items || [], 0, () => runAudit(envIndex + 1));
+
+        const items = res.json().items || [];
+        processDeps(env, items, 0, () => startAudit(index + 1));
     });
 }
 
-function processApps(env, apps, appIndex, onDone) {
-    if (appIndex >= apps.length) {
-        onDone();
-        return;
-    }
+function processDeps(env, list, dIdx, nextEnv) {
+    if (dIdx >= list.length) { nextEnv(); return; }
 
-    const app = apps[appIndex];
-    const detailOptions = {
-        url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments/${app.id}`,
-        method: 'GET',
-        header: {
-            'Authorization': `Bearer ${token}`,
-            'X-ANYPNT-ORG-ID': orgId,
-            'X-ANYPNT-ENV-ID': env.id
-        }
-    };
-
+    const dep = list[dIdx];
     setTimeout(() => {
-        pm.sendRequest(detailOptions, (err, res) => {
+        pm.sendRequest({
+            url: `https://anypoint.mulesoft.com/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments/${dep.id}`,
+            method: 'GET',
+            header: { 'Authorization': `Bearer ${token}`, 'X-ANYPNT-ORG-ID': orgId, 'X-ANYPNT-ENV-ID': env.id }
+        }, (err, res) => {
             if (!err && res.code === 200) {
-                const data = res.json();
-                // Normalization Rule: Remove the environment suffix from app name
-                const parts = data.name.split("-");
-                const normName = parts.length > 1 ? parts.slice(0, -1).join("-") : data.name;
-
-                if (!rows[normName]) rows[normName] = {};
-                rows[normName][env.label] = {
-                    appVersion: data.application?.ref?.version || "N/A",
-                    runtimeVersion: data.runtimeVersion || "N/A",
-                    status: data.status || "UNKNOWN"
+                const d = res.json();
+                const norm = normalizeAppName(d.name);
+                if (!rows[norm]) rows[norm] = {};
+                rows[norm][env.label] = {
+                    appVersion: d.application?.ref?.version || "N/A",
+                    runtimeVersion: d.runtimeVersion || "N/A",
+                    status: d.status || "UNKNOWN"
                 };
             }
-            processApps(env, apps, appIndex + 1, onDone);
+            processDeps(env, list, dIdx + 1, nextEnv);
         });
     }, throttleMs);
 }
 
-// 3. --- VISUALIZATION ---
+// 4. FINALIZER & MATERIAL 3 UI
 function finalize() {
     const finalRows = Object.keys(rows).map(appName => {
         const appData = rows[appName];
         const baseVer = appData[baselineEnvKey]?.appVersion;
-        let rowMismatch = false;
-        
+        let isMismatch = false;
+
         const envDetails = environments.map(env => {
             const cur = appData[env.label];
-            let mClass = "v-mismatch";
+            let mClass = "v-match";
             if (!cur) mClass = "v-missing";
-            else if (env.label.toLowerCase() === baselineEnvKey.toLowerCase()) mClass = "v-baseline";
-            else if (cur.appVersion === baseVer) mClass = "v-match";
-            else rowMismatch = true;
-
-            return { envLabel: env.label, exists: !!cur, appVersion: cur?.appVersion || "N/A", 
-                     runtimeVersion: cur?.runtimeVersion || "N/A", matchClass: mClass };
+            else if (env.label === baselineEnvKey) mClass = "v-baseline";
+            else if (cur.appVersion !== baseVer) {
+                mClass = "v-mismatch";
+                isMismatch = true;
+            }
+            return { label: env.label, exists: !!cur, ...cur, matchClass: mClass };
         });
-        return { appName, envDetails, isMismatch: rowMismatch };
+
+        return { appName, envDetails, isMismatch };
     });
 
     pm.visualizer.set(template, {
-        finalRows,
+        finalRows, 
         envs: environments.map(e => e.label),
-        baseline: baselineEnvKey,
-        prefix: envPrefix
+        baseline: baselineEnvKey
     });
-    console.log("[COMPLETE] Visualizer updated.");
+    log("Audit Complete. Ready to Visualize.");
 }
 
 const template = `
@@ -132,96 +116,121 @@ const template = `
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
-        :root { --p: #6750A4; --s: #FEF7FF; --err: #FFDAD6; --out: #CAC4D0; }
-        body, html { height: 100%; width: 100vw; margin: 0; padding: 0; font-family: 'Roboto', sans-serif; background: var(--s); overflow: hidden; }
+        :root {
+            --primary: #6750A4; --surface: #FEF7FF; --outline: #CAC4D0; --err-bg: #FFDAD6; --err-text: #B3261E;
+        }
+        body, html { height: 100%; width: 100vw; margin: 0; padding: 0; font-family: 'Roboto'; background: var(--surface); overflow: hidden; }
         .wrapper { display: flex; height: 100vh; width: 100vw; }
-        .sidebar { width: 72px; background: #F3EDF7; border-right: 1px solid var(--out); display: flex; flex-direction: column; align-items: center; padding-top: 16px; }
-        .container { flex: 1; display: flex; flex-direction: column; width: calc(100vw - 72px); }
-        .header { padding: 0 16px; height: 56px; background: white; border-bottom: 1px solid var(--out); display: flex; align-items: center; justify-content: space-between; }
-        .search-bar { background: #ECE6F0; border-radius: 28px; padding: 0 16px; display: flex; align-items: center; width: 300px; height: 40px; }
-        .search-bar input { border: none; background: transparent; outline: none; width: 100%; }
+        .sidebar { width: 64px; background: #F3EDF7; border-right: 1px solid var(--outline); display: flex; flex-direction: column; align-items: center; padding-top: 20px; }
+        .container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        .header { padding: 8px 16px; background: white; border-bottom: 1px solid var(--outline); display: flex; align-items: center; justify-content: space-between; height: 56px; }
         .table-area { flex: 1; overflow: auto; background: white; width: 100%; }
-        table { width: 100%; border-collapse: collapse; }
-        th { position: sticky; top: 0; background: #F7F2FA; padding: 16px; text-align: left; font-size: 12px; border-bottom: 2px solid var(--out); }
-        .idx { width: 45px; text-align: center !important; }
-        td { padding: 12px 16px; border-bottom: 1px solid #E7E0EC; }
-        tr.mismatch { background-color: var(--err) !important; }
-        .v-mismatch { color: #B3261E; font-weight: 900; text-decoration: underline; }
+        table { width: 100%; border-collapse: collapse; table-layout: auto; }
+        th { position: sticky; top: 0; background: #F7F2FA; padding: 16px; text-align: left; font-size: 12px; border-bottom: 2px solid var(--outline); z-index: 10; }
+        td { padding: 16px; border-bottom: 1px solid #E7E0EC; }
+        .mismatch-row { background-color: var(--err-bg) !important; }
+        .v-mismatch { color: var(--err-text); font-weight: 900; text-decoration: underline; }
         .v-match { color: #2E7D32; font-weight: 700; }
         .v-baseline { color: #0061A4; font-weight: 700; }
-        .btn { background: var(--p); color: white; border: none; padding: 8px 16px; border-radius: 12px; display: flex; align-items: center; gap: 8px; cursor: pointer; font-weight: 500; }
-        #snackbar { visibility: hidden; min-width: 200px; background: #322F35; color: white; padding: 12px; position: fixed; bottom: 20px; left: 88px; border-radius: 4px; z-index: 1000; }
+        .btn { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 12px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 500; }
+        #snackbar { visibility: hidden; min-width: 200px; background: #322F35; color: white; padding: 12px; position: fixed; bottom: 24px; left: 88px; border-radius: 4px; z-index: 1000; }
         #snackbar.show { visibility: visible; }
-        #copyArea { position: absolute; left: -9999px; }
+        textarea#fallback { position: absolute; left: -9999px; }
+        .col-idx { width: 40px; text-align: center; color: #777; }
     </style>
 </head>
 <body>
     <div class="wrapper">
-        <nav class="sidebar"><div style="color:var(--p)"><span class="material-icons">fact_check</span></div></nav>
-        <main class="container">
+        <div class="sidebar"><span class="material-icons" style="color:var(--primary)">fact_check</span></div>
+        <div class="container">
             <header class="header">
-                <div style="font-weight:500; display:flex; align-items:center; gap:8px">
-                    <span class="material-icons" style="font-size:20px">cloud_sync</span> {{prefix}} Audit
-                </div>
-                <div class="search-bar">
-                    <span class="material-icons" style="font-size:20px; color:#444">search</span>
-                    <input type="text" id="q" onkeyup="filter()" placeholder="Search apps...">
-                </div>
-                <button class="btn" id="cp"><span class="material-icons">content_copy</span> COPY CSV</button>
+                <input type="text" id="search" onkeyup="filter()" placeholder="Search apps..." style="background:#ECE6F0; border:none; padding:10px 20px; border-radius:20px; width:300px;">
+                <button class="btn" id="copyBtn"><span class="material-icons">content_copy</span> COPY REPORT</button>
             </header>
             <div class="table-area">
-                <table id="t">
-                    <thead><tr><th class="idx">#</th><th>Application Name</th>{{#each envs}}<th>{{this}}</th>{{/each}}</tr></thead>
-                    <tbody id="b">
+                <table id="mainTable">
+                    <thead><tr><th class="col-idx">#</th><th>App Name</th>{{#each envs}}<th>{{this}}</th>{{/each}}</tr></thead>
+                    <tbody>
                         {{#each finalRows}}
-                        <tr class="r {{#if isMismatch}}mismatch{{/if}}" data-n="{{appName}}">
-                            <td class="idx row-idx"></td>
+                        <tr class="app-row {{#if isMismatch}}mismatch-row{{/if}}" data-name="{{appName}}">
+                            <td class="col-idx idx-cell"></td>
                             <td><strong>{{appName}}</strong></td>
                             {{#each envDetails}}
-                            <td>{{#if exists}}<div class="{{matchClass}}">v{{appVersion}}</div><div style="font-size:10px; color:#666">RT: {{runtimeVersion}}</div>{{else}}<span style="color:#999">---</span>{{/if}}</td>
+                            <td>
+                                {{#if exists}}
+                                    <div class="{{matchClass}}">v{{appVersion}}</div>
+                                    <div style="font-size:10px">RT: {{runtimeVersion}}</div>
+                                {{else}}
+                                    <span style="color:#999">---</span>
+                                {{/if}}
+                            </td>
                             {{/each}}
                         </tr>
                         {{/each}}
                     </tbody>
                 </table>
             </div>
-        </main>
+        </div>
     </div>
-    <textarea id="copyArea"></textarea>
-    <div id="snackbar">CSV Copied</div>
+    <textarea id="fallback"></textarea>
+    <div id="snackbar"></div>
+
     <script>
         const d = pm.getData();
+        console.log("[DEBUG] Visualizer Start");
+
         function filter() {
-            const q = document.getElementById('q').value.toLowerCase();
-            const rows = document.querySelectorAll('.r');
-            let c = 0;
-            rows.forEach(r => {
-                const n = r.getAttribute('data-n').toLowerCase();
-                if (n.includes(q)) { r.style.display = ''; c++; r.querySelector('.row-idx').textContent = c; }
-                else { r.style.display = 'none'; }
+            const q = document.getElementById('search').value.toLowerCase();
+            let count = 0;
+            document.querySelectorAll('.app-row').forEach(row => {
+                const match = row.getAttribute('data-name').toLowerCase().includes(q);
+                row.style.display = match ? '' : 'none';
+                if(match) row.querySelector('.idx-cell').textContent = ++count;
             });
         }
-        document.getElementById('cp').addEventListener('click', function() {
+        filter();
+
+        // --- CLIPBOARD DEBUG LOGIC ---
+        document.getElementById('copyBtn').addEventListener('click', function() {
+            console.log("[CLIPBOARD] Starting process...");
             let csv = "App,Baseline," + d.envs.join(",") + "\\n";
             d.finalRows.forEach(r => {
-                let row = [r.appName];
-                let b = r.envDetails.find(e => e.envLabel === d.baseline);
-                row.push(b ? b.appVersion : "N/A");
-                r.envDetails.forEach(e => row.push(e.appVersion));
-                csv += row.join(",") + "\\n";
+                let base = r.envDetails.find(e => e.label === d.baseline)?.appVersion || "N/A";
+                csv += r.appName + "," + base + "," + r.envDetails.map(e => e.appVersion || "N/A").join(",") + "\\n";
             });
-            const ta = document.getElementById('copyArea');
-            ta.value = csv; ta.select();
-            if (document.execCommand('copy')) {
-                const s = document.getElementById("snackbar");
-                s.className = "show"; setTimeout(() => s.className = "", 2500);
+
+            console.log("[CLIPBOARD] CSV Generated. Size: " + csv.length);
+            
+            const ta = document.getElementById('fallback');
+            ta.value = csv;
+            ta.focus();
+            ta.select();
+            
+            const success = document.execCommand('copy');
+            if (success) {
+                console.log("[CLIPBOARD] execCommand successful");
+                toast("Report Copied!");
+            } else {
+                console.error("[CLIPBOARD] execCommand failed. Attempting navigator.clipboard...");
+                navigator.clipboard.writeText(csv).then(() => {
+                    console.log("[CLIPBOARD] Navigator success");
+                    toast("Report Copied!");
+                }).catch(e => {
+                    console.error("[CLIPBOARD] All methods failed", e);
+                    toast("Copy Blocked by Postman");
+                });
             }
         });
-        filter();
+
+        function toast(m) {
+            const s = document.getElementById('snackbar');
+            s.textContent = m; s.className = 'show';
+            setTimeout(() => s.className = '', 2500);
+        }
     </script>
 </body>
 </html>
 `;
 
-if (environments.length > 0) runAudit(0);
-else console.error(`No variables found starting with prefix: ${envPrefix}`);
+// Start Execution
+startAudit(0);
