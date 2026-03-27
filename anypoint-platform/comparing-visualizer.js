@@ -119,236 +119,201 @@ function finalize() {
 // 5. MATERIAL DESIGN 3 TEMPLATE
 const template = `
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
     <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     <style>
         :root {
-            --md-sys-color-primary: #6750A4;
-            --md-sys-color-on-primary: #FFFFFF;
-            --md-sys-color-surface: #FEF7FF;
-            --md-sys-color-surface-container: #F3EDF7;
-            --md-sys-color-outline: #CAC4D0;
-            --md-sys-color-error: #B3261E;
-            --md-sys-color-error-container: #F9DEDC;
-            --md-sys-color-success: #2E7D32;
+            --primary: #6750A4;
+            --surface: #FEF7FF;
+            --container: #F3EDF7;
+            --outline: #CAC4D0;
+            --error: #B3261E;
+            --success: #2E7D32;
         }
 
+        /* 1. Viewport Fix: No margins, allow natural scrolling */
         body, html { 
-            height: 100%; margin: 0; padding: 0; 
-            font-family: 'Roboto', sans-serif; background: var(--md-sys-color-surface); 
-            overflow: hidden;
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            font-family: 'Roboto', sans-serif; background: var(--surface);
         }
 
-        .wrapper { display: flex; height: 100vh; width: 100vw; }
+        .layout { display: flex; min-height: 100vh; width: 100%; }
 
-        /* Sidebar Navigation */
+        /* Sidebar - Slim & Static */
         .sidebar {
-            width: 72px; background: var(--md-sys-color-surface-container);
-            border-right: 1px solid var(--md-sys-color-outline);
-            display: flex; flex-direction: column; align-items: center; padding-top: 16px; gap: 12px;
+            width: 64px; background: var(--container);
+            border-right: 1px solid var(--outline);
+            display: flex; flex-direction: column; align-items: center; padding-top: 20px; gap: 20px;
+            position: sticky; top: 0; height: 100vh;
         }
         .nav-item {
-            width: 48px; height: 48px; border-radius: 12px;
+            width: 40px; height: 40px; border-radius: 12px;
             display: flex; align-items: center; justify-content: center;
-            cursor: pointer; color: #49454F; transition: 0.2s;
+            cursor: pointer; color: #49454F;
         }
         .nav-item.active { background: #EADDFF; color: #21005D; }
-        .nav-item:hover:not(.active) { background: #E7E0EC; }
 
-        /* Main Content */
-        .container { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+        /* Main Content - Full Width */
+        .content { flex: 1; display: flex; flex-direction: column; width: calc(100% - 64px); }
 
-        /* Header & Controls */
         .header {
-            padding: 12px 24px; background: var(--md-sys-color-surface);
-            border-bottom: 1px solid var(--md-sys-color-outline);
-            display: flex; align-items: center; gap: 24px;
+            padding: 12px 20px; background: white;
+            border-bottom: 1px solid var(--outline);
+            display: flex; align-items: center; gap: 20px;
+            position: sticky; top: 0; z-index: 100;
         }
-        .search-bar {
-            background: #ECE6F0; border-radius: 28px; padding: 0 16px;
-            display: flex; align-items: center; flex: 1; max-width: 400px; height: 48px;
-        }
-        .search-bar input {
-            border: none; background: transparent; outline: none; padding: 8px; width: 100%; font-size: 16px;
-        }
-        
-        /* Mismatch Toggle Switch */
-        .toggle-container { display: flex; align-items: center; gap: 12px; font-size: 14px; font-weight: 500; cursor: pointer; }
-        .switch {
-            position: relative; width: 52px; height: 32px;
-            background: #79747E; border-radius: 16px; transition: 0.3s;
-        }
-        .switch::after {
-            content: ''; position: absolute; width: 24px; height: 24px;
-            background: white; border-radius: 50%; top: 4px; left: 4px; transition: 0.3s;
-        }
-        input#mismatchToggle:checked + .switch { background: var(--md-sys-color-primary); }
-        input#mismatchToggle:checked + .switch::after { left: 24px; }
 
-        /* Table Area */
-        .table-area { flex: 1; overflow: auto; background: white; }
-        table { width: 100%; border-collapse: collapse; min-width: 1000px; }
+        .search-box {
+            background: #ECE6F0; border-radius: 24px; padding: 0 16px;
+            display: flex; align-items: center; flex: 1; height: 44px;
+        }
+        .search-box input {
+            border: none; background: transparent; outline: none; width: 100%; padding: 8px; font-size: 14px;
+        }
+
+        /* 2. Toggle Fix: Classy M3 Switch */
+        .switch-group { display: flex; align-items: center; gap: 10px; font-size: 13px; font-weight: 500; cursor: pointer; }
+        .m3-switch {
+            position: relative; width: 40px; height: 20px; background: #938F99; border-radius: 10px; transition: 0.2s;
+        }
+        .m3-switch::before {
+            content: ""; position: absolute; width: 14px; height: 14px; background: white;
+            border-radius: 50%; top: 3px; left: 3px; transition: 0.2s;
+        }
+        input:checked + .m3-switch { background: var(--primary); }
+        input:checked + .m3-switch::before { left: 23px; }
+
+        /* 3. Table Fix: Use the whole width, allow vertical scroll */
+        .table-container { width: 100%; overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; table-layout: auto; }
         th { 
-            position: sticky; top: 0; background: #F7F2FA; z-index: 10;
-            padding: 16px; text-align: left; font-size: 12px; color: #49454F;
-            border-bottom: 1px solid var(--md-sys-color-outline);
+            background: #F7F2FA; padding: 16px; text-align: left; font-size: 12px; 
+            color: #49454F; border-bottom: 1px solid var(--outline);
         }
-        td { padding: 12px 16px; border-bottom: 1px solid #E7E0EC; }
-        
-        /* Row Highlighting */
-        tr.mismatch-row { background-color: #FFF0F0; }
-        tr.mismatch-row:hover { background-color: #FFEBEE; }
-        
-        .v-match { color: var(--md-sys-color-success); font-weight: 700; }
-        .v-mismatch { color: var(--md-sys-color-error); font-weight: 700; }
-        .v-baseline { color: #0061A4; font-weight: 700; }
+        td { padding: 14px 16px; border-bottom: 1px solid #E7E0EC; }
 
-        .btn-fab {
-            background: var(--md-sys-color-primary); color: white; border: none;
-            padding: 10px 20px; border-radius: 16px; display: flex; align-items: center; gap: 8px;
-            font-weight: 500; cursor: pointer;
+        tr.mismatch { background: #FFF8F8; }
+        .v-match { color: var(--success); font-weight: 700; }
+        .v-mismatch { color: var(--error); font-weight: 700; }
+        .v-baseline { color: #0061A4; font-weight: 700; border-left: 3px solid #0061A4; padding-left: 8px; }
+
+        .btn-copy {
+            background: var(--primary); color: white; border: none; padding: 10px 16px;
+            border-radius: 20px; cursor: pointer; display: flex; align-items: center; gap: 6px; font-size: 13px;
         }
 
-        /* Hidden elements */
-        .tab-content { display: none; height: 100%; }
-        .tab-content.active { display: block; }
         #snackbar {
-            visibility: hidden; min-width: 250px; background: #322F35; color: white;
-            padding: 14px 24px; position: fixed; bottom: 24px; left: 88px; border-radius: 4px; z-index: 1000;
+            visibility: hidden; position: fixed; bottom: 20px; left: 84px;
+            background: #322F35; color: white; padding: 12px 24px; border-radius: 4px; z-index: 1000;
         }
         #snackbar.show { visibility: visible; }
     </style>
 </head>
 <body>
-    <div class="wrapper">
-        <nav class="sidebar">
-            <div class="nav-item active" onclick="switchTab('audit', this)" title="Audit View">
-                <span class="material-icons">fact_check</span>
-            </div>
-            <div class="nav-item" onclick="switchTab('stats', this)" title="Runtime Stats">
-                <span class="material-icons">insights</span>
-            </div>
-        </nav>
+    <div class="layout">
+        <div class="sidebar">
+            <div class="nav-item active"><span class="material-icons">fact_check</span></div>
+            <div class="nav-item"><span class="material-icons">insights</span></div>
+        </div>
 
-        <main class="container">
-            <header class="header">
-                <div class="search-bar">
-                    <span class="material-icons" style="color:#49454F">search</span>
-                    <input type="text" id="searchInput" onkeyup="filterTable()" placeholder="Search apps...">
+        <div class="content">
+            <div class="header">
+                <div class="search-box">
+                    <span class="material-icons" style="font-size:20px">search</span>
+                    <input type="text" id="srch" onkeyup="doUpdate()" placeholder="Filter apps...">
                 </div>
                 
-                <label class="toggle-container">
-                    <span>Show Mismatches Only</span>
-                    <input type="checkbox" id="mismatchToggle" onchange="filterTable()" style="display:none">
-                    <div class="switch"></div>
+                <label class="switch-group">
+                    <span>Mismatches</span>
+                    <input type="checkbox" id="tog" onchange="doUpdate()" style="display:none">
+                    <div class="m3-switch"></div>
                 </label>
 
-                <button class="btn-fab" onclick="copyCSV()">
-                    <span class="material-icons">download</span> Copy CSV
+                <button class="btn-copy" onclick="doCopy()">
+                    <span class="material-icons" style="font-size:18px">content_copy</span> Copy Report
                 </button>
-            </header>
+            </div>
 
-            <div id="audit" class="tab-content active">
-                <div class="table-area">
-                    <table id="auditTable">
-                        <thead>
-                            <tr>
-                                <th>App Name</th>
-                                {{#each envs}}
-                                <th>{{this}}</th>
-                                {{/each}}
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {{#each finalRows}}
-                            <tr class="app-row {{#if isMismatch}}mismatch-row{{/if}}" data-name="{{appName}}" data-mismatch="{{isMismatch}}">
-                                <td><strong>{{appName}}</strong></td>
-                                {{#each envDetails}}
-                                <td>
-                                    {{#if exists}}
-                                        <div class="{{matchClass}}">v{{appVersion}}</div>
-                                        <div style="font-size:10px; color:#666">RT: {{runtimeVersion}}</div>
-                                    {{else}}
-                                        <span style="color:#999">---</span>
-                                    {{/if}}
-                                </td>
-                                {{/each}}
-                            </tr>
+            <div class="table-container">
+                <table id="target">
+                    <thead>
+                        <tr>
+                            <th>Application Name</th>
+                            {{#each envs}}<th>{{this}}</th>{{/each}}
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {{#each finalRows}}
+                        <tr class="item-row {{#if isMismatch}}mismatch{{/if}}" 
+                            data-n="{{appName}}" 
+                            data-m="{{isMismatch}}">
+                            <td><strong>{{appName}}</strong></td>
+                            {{#each envDetails}}
+                            <td>
+                                {{#if exists}}
+                                    <div class="{{matchClass}}">v{{appVersion}}</div>
+                                    <div style="font-size:10px; color:#444">RT: {{runtimeVersion}}</div>
+                                {{else}}<span style="color:#CCC">---</span>{{/if}}
+                            </td>
                             {{/each}}
-                        </tbody>
-                    </table>
-                </div>
+                        </tr>
+                        {{/each}}
+                    </tbody>
+                </table>
             </div>
-
-            <div id="stats" class="tab-content">
-                <div class="table-area" style="padding:40px;">
-                    <h3>Runtime Analytics</h3>
-                    <p>Coming Soon: Detailed Memory, CPU, and Patching analysis for CH2.0 clusters.</p>
-                </div>
-            </div>
-        </main>
+        </div>
     </div>
 
-    <div id="snackbar">CSV Copied</div>
+    <div id="snackbar" id="toast">Report Copied</div>
 
     <script>
-        const d = pm.getData();
+        const data = pm.getData();
 
-        function switchTab(tabId, el) {
-            document.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
-            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-            document.getElementById(tabId).classList.add('active');
-            el.classList.add('active');
-        }
+        // 1. FIXED TOGGLE & SEARCH LOGIC
+        function doUpdate() {
+            const q = document.getElementById('srch').value.toLowerCase();
+            const onlyM = document.getElementById('tog').checked;
+            const rows = document.querySelectorAll('.item-row');
 
-        function filterTable() {
-            const query = document.getElementById('searchInput').value.toLowerCase();
-            const showOnlyMismatches = document.getElementById('mismatchToggle').checked;
-            const rows = document.querySelectorAll('.app-row');
-
-            rows.forEach(row => {
-                const name = row.getAttribute('data-name').toLowerCase();
-                const isMismatch = row.getAttribute('data-mismatch') === 'true';
-                
-                const matchesSearch = name.includes(query);
-                const matchesToggle = !showOnlyMismatches || isMismatch;
-
-                row.style.display = (matchesSearch && matchesToggle) ? '' : 'none';
+            rows.forEach(r => {
+                const name = r.getAttribute('data-n').toLowerCase();
+                const isM = r.getAttribute('data-m') === 'true';
+                const show = name.includes(q) && (!onlyM || isM);
+                r.style.display = show ? '' : 'none';
             });
         }
 
-        function copyCSV() {
-            let csv = "App,Baseline," + d.envs.join(",") + "\\n";
-            d.finalRows.forEach(r => {
-                let row = [r.appName];
-                let b = r.envDetails.find(e => e.envLabel === d.baseline);
-                row.push(b ? b.appVersion : "N/A");
-                r.envDetails.forEach(e => row.push(e.appVersion));
-                csv += row.join(",") + "\\n";
+        // 2. FIXED CLIPBOARD LOGIC (PROPER FALLBACK)
+        function doCopy() {
+            let csv = "App,Baseline," + data.envs.join(",") + "\\n";
+            data.finalRows.forEach(r => {
+                let line = [r.appName];
+                let b = r.envDetails.find(e => e.envLabel === data.baseline);
+                line.push(b ? b.appVersion : "N/A");
+                r.envDetails.forEach(e => line.push(e.appVersion));
+                csv += line.join(",") + "\\n";
             });
 
-            // FIXED CLIPBOARD LOGIC
-            const textArea = document.createElement("textarea");
-            textArea.value = csv;
-            document.body.appendChild(textArea);
-            textArea.select();
-            try {
-                document.execCommand('copy');
-                showToast("CSV Copied to Clipboard");
-            } catch (err) {
-                console.error('Copy failed', err);
-            }
-            document.body.removeChild(textArea);
+            const el = document.createElement('textarea');
+            el.value = csv;
+            el.setAttribute('readonly', '');
+            el.style.position = 'absolute';
+            el.style.left = '-9999px';
+            document.body.appendChild(el);
+            el.select();
+            document.execCommand('copy');
+            document.body.removeChild(el);
+            
+            showToast("Audit Report copied to clipboard");
         }
 
-        function showToast(msg) {
-            const x = document.getElementById("snackbar");
-            x.innerText = msg;
-            x.className = "show";
-            setTimeout(() => { x.className = ""; }, 3000);
+        function showToast(m) {
+            const s = document.getElementById("snackbar");
+            s.innerText = m;
+            s.className = "show";
+            setTimeout(() => { s.className = ""; }, 3000);
         }
     </script>
 </body>
