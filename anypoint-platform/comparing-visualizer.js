@@ -1,12 +1,10 @@
-// --- 1. CONFIGURATION & DYNAMIC DISCOVERY ---
+// --- 1. CONFIGURATION ---
 const token = pm.collectionVariables.get("token");
 const orgId = pm.collectionVariables.get("orgId");
 const envPrefix = pm.collectionVariables.get("envPrefix");
 const baseline = pm.collectionVariables.get("baselineEnv");
-const throttleMs = parseInt(pm.collectionVariables.get("throttleMs")) || 150;
 const host = "http://localhost:3000"; 
 
-// GLOBAL STATUS CONFIGURATION
 const EXPECTED_STATUSES = ["RUNNING", "STARTED", "DEPLOYED"];
 const UNEXPECTED_STATUSES = ["FAILED", "STOPPED", "UNDEPLOYED", "DELETING"];
 
@@ -16,48 +14,70 @@ const environments = Object.keys(allVars)
     .filter(key => key.startsWith(envPrefix))
     .map(key => ({ label: key, id: allVars[key] }));
 
-// --- 2. EXECUTION ENGINE ---
-function startAudit(index) {
-    if (index >= environments.length) { finalize(); return; }
-    const env = environments[index];
-    
-    pm.sendRequest({
-        url: `${host}/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments`,
-        method: 'GET',
-        header: { 'Authorization': `Bearer ${token}`, 'X-ANYPNT-ORG-ID': orgId, 'X-ANYPNT-ENV-ID': env.id }
-    }, (err, res) => {
-        if (err || res.code !== 200) { startAudit(index + 1); return; }
-        const items = res.json().items || [];
-        processDeps(env, items, 0, () => startAudit(index + 1));
-    });
-}
+let totalRequestsSent = 0;
+let totalRequestsResolved = 0;
 
-function processDeps(env, list, dIdx, nextEnv) {
-    if (dIdx >= list.length) { nextEnv(); return; }
-    const dep = list[dIdx];
-    setTimeout(() => {
+// --- 2. THE PARALLEL ENGINE ---
+function startAudit() {
+    if (environments.length === 0) return;
+
+    environments.forEach(env => {
         pm.sendRequest({
-            url: `${host}/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments/${dep.id}`,
+            url: `${host}/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments`,
             method: 'GET',
             header: { 'Authorization': `Bearer ${token}`, 'X-ANYPNT-ORG-ID': orgId, 'X-ANYPNT-ENV-ID': env.id }
         }, (err, res) => {
-            if (!err && res.code === 200) {
-                const d = res.json();
-                const norm = d.name.split("-").slice(0, -1).join("-") || d.name;
-                if (!rows[norm]) rows[norm] = {};
-                rows[norm][env.label] = {
-                    appVersion: d.application?.ref?.version || "N/A",
-                    status: d.status || "UNKNOWN",
-                    runtimeVersion: d.runtimeVersion || "N/A",
-                    fullDetail: d 
-                };
+            if (err || res.code !== 200) {
+                checkCompletion(); // Even if it fails, we must count it
+                return;
             }
-            processDeps(env, list, dIdx + 1, nextEnv);
+            const items = res.json().items || [];
+            if (items.length === 0) {
+                checkCompletion();
+                return;
+            }
+
+            // Trigger all app detail requests for this environment in parallel
+            items.forEach(dep => {
+                totalRequestsSent++;
+                fetchAppDetails(env, dep);
+            });
         });
-    }, throttleMs);
+    });
 }
 
-// --- 3. VIEWMODEL & VISUALIZER SET ---
+function fetchAppDetails(env, dep) {
+    pm.sendRequest({
+        url: `${host}/amc/application-manager/api/v2/organizations/${orgId}/environments/${env.id}/deployments/${dep.id}`,
+        method: 'GET',
+        header: { 'Authorization': `Bearer ${token}`, 'X-ANYPNT-ORG-ID': orgId, 'X-ANYPNT-ENV-ID': env.id }
+    }, (err, res) => {
+        totalRequestsResolved++;
+        
+        if (!err && res.code === 200) {
+            const d = res.json();
+            const norm = d.name.split("-").slice(0, -1).join("-") || d.name;
+            if (!rows[norm]) rows[norm] = {};
+            rows[norm][env.label] = {
+                appVersion: d.application?.ref?.version || "N/A",
+                status: d.status || "UNKNOWN",
+                runtimeVersion: d.runtimeVersion || "N/A",
+                fullDetail: d 
+            };
+        }
+        
+        checkCompletion();
+    });
+}
+
+function checkCompletion() {
+    // We only finalize when every request we triggered has returned
+    if (totalRequestsSent > 0 && totalRequestsResolved === totalRequestsSent) {
+        finalize();
+    }
+}
+
+// --- 3. VIEWMODEL & VISUALIZER (Unchanged) ---
 function finalize() {
     const envList = environments.map(e => e.label);
     const lastRun = new Date().toLocaleString();
@@ -65,30 +85,20 @@ function finalize() {
     const finalRows = Object.keys(rows).map(appName => {
         const appData = rows[appName];
         const baseVer = appData[baseline]?.appVersion;
-        let isMismatch = false;
-
         const envDetails = envList.map(label => {
             const cur = appData[label];
             let mClass = "v-match";
             if (!cur) mClass = "v-missing";
             else if (label === baseline) mClass = "v-baseline";
-            else if (cur.appVersion !== baseVer) { mClass = "v-mismatch"; isMismatch = true; }
+            else if (cur.appVersion !== baseVer) mClass = "v-mismatch";
             return { envLabel: label, exists: !!cur, ...cur, matchClass: mClass };
         });
-        return { appName, envDetails, isMismatch };
+        return { appName, envDetails, isMismatch: envDetails.some(e => e.matchClass === 'v-mismatch') };
     });
 
-    const viewModel = { 
-        envs: envList, 
-        baseline, 
-        finalRows, 
-        lastRun,
-        expected: EXPECTED_STATUSES, 
-        unexpected: UNEXPECTED_STATUSES 
-    };
-    
+    const viewModel = { envs: envList, baseline, finalRows, lastRun, expected: EXPECTED_STATUSES, unexpected: UNEXPECTED_STATUSES };
     const dataJson = JSON.stringify(viewModel).replace(/</g, "\\u003c");
-    pm.visualizer.set(template, { dataJson, envs: envList, baseline: baseline });
+    pm.visualizer.set(template, { dataJson, envs: envList, baseline });
 }
 
 // --- 4. THE TEMPLATE ---
@@ -306,4 +316,4 @@ const template = `
 </html>
 `;
 
-startAudit(0);
+startAudit();
