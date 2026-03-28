@@ -1,38 +1,27 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# --- Node.js ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# SQLite database
-*.db
-
-# Virtual environment
-venv/
-.env/
-.env.*  # for env variants like .env.development
-bin/
-bin.*
-include/
-include.*
-lib/
-lib.*
-
-# VSCode or IDE config (optional)
+# --- Visual Studio Code ---
 .vscode/
-.idea/
+!.vscode/extensions.json
+*.code-workspace
+.history/
 
-# Pytest / coverage files (if tests added later)
-.cache/
-*.cover
-coverage.*
-htmlcov/
-
-# Mac OS metadata
+# --- Operating System ---
 .DS_Store
+Thumbs.db
 
-# Postman export backups (optional)
-*.postman_collection.json~
-*.postman_environment.json~
-
-# Log files
+# --- Project Specific ---
+# (If your mock server generates local CSV exports or logs)
+*.csv
+logs/
 *.log
