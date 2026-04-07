@@ -1,29 +1,33 @@
 # --- Configuration ---
-$appListFile = "app-list.txt"
+# Use absolute paths to be safe
+$appListFile = "C:\MuleProjects\app-list.txt" 
 $baseSshUrl = 'git@ssh.dev.azure.com:v3/YourOrg/YourProject/' 
-$rootWorkDir = "C:\MuleTempBuilds" # Parent directory for all apps
-$consolidatedCsv = Join-Path $rootWorkDir "Consolidated_Coverage_Report.csv"
+$rootWorkDir = "C:\MuleTempBuilds"
+$consolidatedCsv = "$rootWorkDir\Consolidated_Coverage_Report.csv"
 
 # --- Initialization ---
 if (!(Test-Path $rootWorkDir)) { 
-    New-Item -ItemType Directory -Path $rootWorkDir | Out-Null 
+    New-Item -ItemType Directory -Path $rootWorkDir -Force | Out-Null 
 }
 
-# Initialize the CSV with headers
-"Repository,Status,CoveragePercentage,LastUpdated" | Out-File -FilePath $consolidatedCsv -Encoding utf8
+# Initialize the CSV with headers - Clear previous report if it exists
+"Repository,Status,CoveragePercentage,LastUpdated" | Out-File -FilePath $consolidatedCsv -Encoding utf8 -Force
 
 if (!(Test-Path $appListFile)) {
-    Write-Host "Error: $appListFile not found!" -ForegroundColor Red
+    Write-Host "Error: $appListFile not found at the specified path!" -ForegroundColor Red
     return
 }
 
-$repos = Get-Content $appListFile
+# Read lines and filter out any empty rows or whitespace
+$repos = Get-Content $appListFile | Where-Object { ![string]::IsNullOrWhiteSpace($_) }
 
 foreach ($repoName in $repos) {
-    if ([string]::IsNullOrWhiteSpace($repoName)) { continue }
+    # Clean the string (remove trailing spaces or hidden characters)
+    $repoName = $repoName.Trim()
     
     $repoUrl = "$baseSshUrl$repoName"
-    $targetPath = Join-Path $rootWorkDir $repoName
+    $targetPath = Join-Path -Path $rootWorkDir -ChildPath $repoName
+    
     Write-Host "`n>>> Processing: $repoName" -ForegroundColor Cyan
 
     try {
@@ -31,7 +35,7 @@ foreach ($repoName in $repos) {
             # 1. Update Existing Repo
             Write-Host "Existing folder found. Resetting and pulling latest..." -ForegroundColor Gray
             Set-Location $targetPath
-            git reset --hard origin/dev
+            git reset --hard
             git checkout dev
             git fetch --all
             git pull origin dev
@@ -43,9 +47,8 @@ foreach ($repoName in $repos) {
             Set-Location $targetPath
         }
 
-        # 3. Execute Maven
+        # 3. Execute Maven (Escaping colons for PS parser)
         Write-Host "Running MUnit..." -ForegroundColor Blue
-        # Using backticks to escape colons for PowerShell
         mvn clean com.mulesoft.munit.tools`:munit-maven-plugin`:test "-DruntimeVersion=4.4.0" "-Dmaven.test.failure.ignore=true"
 
         # 4. Extract Coverage from HTML
@@ -58,10 +61,10 @@ foreach ($repoName in $repos) {
             if ($htmlContent -match '<span>(\d+(?:\.\d+)?)%</span>') {
                 $coverage = $matches[1] + "%"
             } else {
-                $coverage = "Data Missing"
+                $coverage = "No Data"
             }
         } else {
-            $status = "No Report Generated"
+            $status = "Build Failed/No Report"
             $coverage = "N/A"
         }
 
@@ -75,5 +78,5 @@ foreach ($repoName in $repos) {
     }
 }
 
-Write-Host "`nFinished! Consolidated report available at: $consolidatedCsv" -ForegroundColor Green
+Write-Host "`nFinished! Report: $consolidatedCsv" -ForegroundColor Green
 Set-Location $rootWorkDir
