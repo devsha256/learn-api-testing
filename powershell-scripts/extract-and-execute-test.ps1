@@ -1,19 +1,21 @@
 # --- Configuration ---
-$appListFile = "C:\MuleProjects\app-list.txt" 
+$rootWorkDir = "C:\MuleProjects\munit-runner" # The script home
+$appListFile = Join-Path $rootWorkDir "app-list.txt"
+$tempWorkDir = Join-Path $rootWorkDir "MuleTempBuilds" # Where apps are cloned
+
 $baseSshUrl = 'git@ssh.dev.azure.com:v3/YourOrg/YourProject/' 
-$rootWorkDir = "C:\MuleTempBuilds"
 $consolidatedCsv = Join-Path $rootWorkDir "Consolidated_Coverage_Report.csv"
 $apiReportsFolder = Join-Path $rootWorkDir "All_API_Reports"
 
 # --- Initialization ---
-if (!(Test-Path $rootWorkDir)) { New-Item -ItemType Directory -Path $rootWorkDir -Force | Out-Null }
+if (!(Test-Path $tempWorkDir)) { New-Item -ItemType Directory -Path $tempWorkDir -Force | Out-Null }
 if (!(Test-Path $apiReportsFolder)) { New-Item -ItemType Directory -Path $apiReportsFolder -Force | Out-Null }
 
-# Initialize CSV
+# Set Headers and Clear Old Report
 "Repository,Component,Status,Coverage,Details,Timestamp" | Out-File $consolidatedCsv -Encoding utf8 -Force
 
 if (!(Test-Path $appListFile)) {
-    Write-Host "Error: $appListFile not found!" -ForegroundColor Red
+    Write-Host "Error: $appListFile not found in $rootWorkDir" -ForegroundColor Red
     return
 }
 
@@ -21,16 +23,18 @@ $repos = Get-Content $appListFile | Where-Object { ![string]::IsNullOrWhiteSpace
 
 foreach ($repoName in $repos) {
     $repoName = $repoName.Trim()
-    $targetPath = Join-Path $rootWorkDir $repoName
+    $targetPath = Join-Path $tempWorkDir $repoName # Apps go into the temp subfolder
     Write-Host "`n>>> Processing: $repoName" -ForegroundColor Cyan
 
     try {
-        # 1. Git Sync
+        # 1. Git Sync Logic
         if (Test-Path $targetPath) {
+            Write-Host "Syncing existing code..." -ForegroundColor Gray
             Set-Location $targetPath
-            git reset --hard; git checkout dev; git pull origin dev --quiet
+            git reset --hard; git checkout dev; git fetch --all; git pull origin dev --quiet
         } else {
-            Set-Location $rootWorkDir
+            Write-Host "Cloning into temp workspace..." -ForegroundColor Gray
+            Set-Location $tempWorkDir
             git clone --branch dev --single-branch "$baseSshUrl$repoName" $repoName --quiet
             Set-Location $targetPath
         }
@@ -51,12 +55,11 @@ foreach ($repoName in $repos) {
             if ($html -match '<span>(\d+(?:\.\d+)?)%</span>') { $overallCoverage = $matches[1] + "%" }
         }
 
-        # 4. Collect API Reports
+        # 4. Collect API Reports to rootWorkDir subfolder
         $apiReportSource = "$targetPath\target\site\munit\coverage\api-reports.html"
         if (Test-Path $apiReportSource) {
-            $destinationName = "$repoName-api-reports.html"
-            Copy-Item -Path $apiReportSource -Destination (Join-Path $apiReportsFolder $destinationName) -Force
-            Write-Host "API Report archived as $destinationName" -ForegroundColor Gray
+            $destFile = Join-Path $apiReportsFolder "$repoName-api-reports.html"
+            Copy-Item -Path $apiReportSource -Destination $destFile -Force
         }
 
         # 5. Parse Test Failures
@@ -76,7 +79,7 @@ foreach ($repoName in $repos) {
             }
         }
 
-        # 6. Global Result Logging
+        # 6. Success/Build Error Logging
         if ($mvnOutput -match "BUILD FAILURE" -and $failureCount -eq 0) {
             $buildErr = ($mvnOutput -match "\[ERROR\]" | Select-Object -First 1) -replace '[,"]',' '
             "$repoName,BuildSystem,BUILD_ERROR,$overallCoverage,$buildErr,$(Get-Date)" | Out-File $consolidatedCsv -Append
@@ -89,6 +92,6 @@ foreach ($repoName in $repos) {
     }
 }
 
-Write-Host "`nTasks Finished!" -ForegroundColor Green
-Write-Host "CSV Summary: $consolidatedCsv" -ForegroundColor White
-Write-Host "HTML Reports: $apiReportsFolder" -ForegroundColor White
+# Return to script root
+Set-Location $rootWorkDir
+Write-Host "`nAll tasks finished. Check your reports in: $rootWorkDir" -ForegroundColor Green
