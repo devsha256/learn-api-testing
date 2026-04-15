@@ -1,36 +1,50 @@
 // --- 1. DETECT SESSION STATUS ---
 if (pm.response.code === 401 || pm.response.code === 403) {
     
-    // Replace with your vanity domain if needed
+    // Replace with vanity domain if needed
     const ssoUrl = "https://anypoint.mulesoft.com/accounts/login";
 
     const template = `
     <div style="text-align:center; padding:40px; font-family: 'Roboto', sans-serif; background: #FEF7FF; height:100vh;">
         <span class="material-icons" style="font-size:64px; color:#6750A4;">security</span>
         <h2 style="color:#1C1B1F; margin:16px 0;">SSO Authentication</h2>
-        <p style="color:#49454F; font-size:14px;">Your local session is missing or expired.</p>
+        <p style="color:#49454F; font-size:14px;">Postman Sandbox blocks automatic redirects.</p>
         
-        <button onclick="openSSO()" 
-           style="background:#6750A4; color:white; padding:12px 24px; border-radius:12px; border:none; font-weight:500; display:inline-block; margin:20px 0; cursor:pointer; box-shadow: 0 2px 4px rgba(0,0,0,0.1);">
-           LOG IN VIA BROWSER
-        </button>
+        <div style="background:white; border:1px solid #CAC4D0; border-radius:12px; padding:20px; margin-top:10px;">
+            <p style="font-size:12px; color:#666; margin-bottom:12px;">Click to copy the login URL, then paste in Chrome:</p>
+            <button id="copyBtn" onclick="copyToClipboard()" 
+               style="background:#6750A4; color:white; padding:12px 24px; border-radius:12px; border:none; font-weight:500; width:100%; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:8px;">
+               <span class="material-icons" style="font-size:18px;">content_copy</span>
+               COPY LOGIN URL
+            </button>
+            <p id="feedback" style="font-size:11px; color:#2E7D32; font-weight:bold; margin-top:8px; visibility:hidden;">COPIED TO CLIPBOARD!</p>
+        </div>
         
-        <div style="background:#F3EDF7; padding:16px; border-radius:12px; font-size:12px; color:#49454F; text-align:left; max-width:320px; margin:0 auto;">
-            <strong>If the button fails:</strong><br>
-            1. Ensure the <b>Postman Desktop Agent</b> is running.<br>
-            2. Manually open <b>anypoint.mulesoft.com</b> in Chrome.<br>
-            3. Log in, then come back and click <b>SEND</b> in Postman.
+        <div style="margin-top:20px; font-size:12px; color:#49454F;">
+            1. Paste in <b>Chrome</b> & Log in.<br>
+            2. Return to Postman and click <b>SEND</b>.
         </div>
     </div>
     <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
     
     <script>
-        function openSSO() {
-            // Force a new window/tab via JavaScript
-            const win = window.open("${ssoUrl}", "_blank", "noopener,noreferrer");
-            if (!win) {
-                alert("Popup blocked! Please allow popups for Postman or open the URL manually in Chrome.");
-            }
+        function copyToClipboard() {
+            const url = "${ssoUrl}";
+            // The modern way to copy in a sandbox
+            navigator.clipboard.writeText(url).then(() => {
+                const btn = document.getElementById('copyBtn');
+                const feedback = document.getElementById('feedback');
+                
+                feedback.style.visibility = 'visible';
+                btn.style.background = '#2E7D32';
+                btn.innerHTML = '<span class="material-icons" style="font-size:18px;">check</span> COPIED';
+                
+                setTimeout(() => {
+                    feedback.style.visibility = 'hidden';
+                    btn.style.background = '#6750A4';
+                    btn.innerHTML = '<span class="material-icons" style="font-size:18px;">content_copy</span> COPY LOGIN URL';
+                }, 3000);
+            });
         }
     </script>
     `;
@@ -51,18 +65,16 @@ if (pm.response.code === 401 || pm.response.code === 403) {
             pm.visualizer.set(\`
                 <div style="text-align:center; padding:40px; font-family: 'Roboto', sans-serif;">
                     <span class="material-icons" style="font-size:64px; color:#2E7D32;">check_circle</span>
-                    <h2 style="color:#1C1B1F;">Success!</h2>
-                    <p>Token captured and saved to 'token' variable.</p>
-                    <div style="background:#eee; padding:8px; border-radius:8px; font-family:monospace; font-size:11px; word-break:break-all;">
+                    <h2 style="color:#1C1B1F;">Bridge Connected</h2>
+                    <p>Token successfully captured into collection variables.</p>
+                    <div style="background:#eee; padding:10px; border-radius:8px; font-family:monospace; font-size:11px;">
                         Bearer \${token.substring(0,20)}...
                     </div>
-                    <p style="font-size:12px; margin-top:20px; color:#666;">You can now run the Deployment Auditor.</p>
                 </div>
                 <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
             \`);
         } else {
-            console.error("Cookie Exchange Failed", res.json());
-            pm.visualizer.set("<h3>Cookie found, but exchange failed. Ensure 'mulesoft.com' is allowed in Cookie Settings.</h3>");
+            pm.visualizer.set("<h3>Ensure 'mulesoft.com' is allowed in Cookie Settings.</h3>");
         }
     });
 }
