@@ -1,0 +1,187 @@
+/**
+ * Azure DevOps Mass PR Automator - Material 3
+ * Logic: Parallel Batch Execution & Visualizer Rendering
+ */
+
+// 1. Configuration & State
+const repositories = pm.iterationData.get("repositories") || []; // Expecting JSON array from previous step or CSV
+const results = [];
+let completedRequests = 0;
+const totalRequests = repositories.length;
+
+// Material 3 Theme Constants
+const M3_COLORS = {
+    primary: '#6750A4',
+    surface: '#FEF7FF',
+    error: '#B3261E',
+    onSurface: '#1D1B20'
+};
+
+// 2. The Execution Engine
+function initiateBatch() {
+    repositories.forEach(repo => {
+        const prPayload = {
+            sourceRefName: `refs/heads/${repo.fromBranch}`,
+            targetRefName: `refs/heads/${repo.toBranch}`,
+            title: `Automated PR: ${repo.fromBranch} to ${repo.toBranch}`,
+            description: "Mass PR Automation via Postman"
+        };
+
+        // Fire and Track logic
+        pm.sendRequest({
+            url: `https://dev.azure.com/${pm.collectionVariables.get("org")}/${pm.collectionVariables.get("project")}/_apis/git/repositories/${repo.repository}/pullrequests?api-version=7.1`,
+            method: 'POST',
+            header: {
+                'Content-Type': 'application/json',
+                'Authorization': `Basic ${btoa(':' + pm.collectionVariables.get("pat"))}`
+            },
+            body: { mode: 'raw', raw: JSON.stringify(prPayload) }
+        }, (err, res) => {
+            handleResponse(repo.repository, res, err);
+        });
+    });
+}
+
+function handleResponse(repoName, res, err) {
+    completedRequests++;
+    
+    let status = "Success";
+    let detail = "";
+    let prUrl = "#";
+
+    if (err || res.code !== 201) {
+        status = "Error";
+        if (res.code === 409) detail = "Conflict: PR already exists.";
+        else if (res.code === 401) detail = "401: PAT Expired.";
+        else detail = res.json().message || "Unknown Error";
+    } else {
+        const data = res.json();
+        prUrl = data.url.replace('_apis/git/repositories/', '_git/').replace('/pullrequests/', '/pullrequest/');
+        detail = `ID: ${data.pullRequestId}`;
+    }
+
+    results.push({ repository: repoName, status, detail, url: prUrl });
+
+    // Only render when the "settled" counter matches the batch size
+    if (completedRequests === totalRequests) {
+        renderVisualizer();
+    }
+}
+
+// 3. The Visualizer Template
+function renderVisualizer() {
+    const template = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+        <style>
+            :root {
+                --primary: ${M3_COLORS.primary};
+                --surface: ${M3_COLORS.surface};
+                --error: ${M3_COLORS.error};
+            }
+            body { 
+                font-family: 'Roboto', sans-serif; 
+                background-color: var(--surface); 
+                color: #1D1B20;
+                margin: 0; padding: 24px;
+            }
+            .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
+            .card {
+                background: #fff;
+                border-radius: 12px;
+                padding: 16px;
+                margin-bottom: 8px;
+                display: flex;
+                align-items: center;
+                box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+                border: 1px solid #CAC4D0;
+            }
+            .status-icon { margin-right: 16px; }
+            .success { color: var(--primary); }
+            .fail { color: var(--error); }
+            .repo-info { flex-grow: 1; }
+            .repo-name { font-weight: 500; font-size: 16px; }
+            .repo-detail { font-size: 12px; color: #49454F; }
+            
+            /* Floating Action Button */
+            .fab {
+                position: fixed;
+                bottom: 24px;
+                right: 24px;
+                background: var(--primary);
+                color: white;
+                border: none;
+                border-radius: 16px;
+                padding: 16px 24px;
+                display: flex;
+                align-items: center;
+                cursor: pointer;
+                box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+                transition: transform 0.2s;
+            }
+            .fab:active { transform: scale(0.95); }
+            .fab i { margin-right: 8px; }
+            
+            #clipboard-shim { position: absolute; left: -9999px; top: 0; }
+        </style>
+    </head>
+    <body>
+        <div class="header">
+            <h2>PR Automation Summary</h2>
+            <div id="stats">Total: ${totalRequests}</div>
+        </div>
+
+        <div id="container">
+            ${results.map(item => `
+                <div class="card">
+                    <i class="material-icons status-icon ${item.status === 'Success' ? 'success' : 'fail'}">
+                        ${item.status === 'Success' ? 'check_circle' : 'error'}
+                    </i>
+                    <div class="repo-info">
+                        <div class="repo-name">${item.repository}</div>
+                        <div class="repo-detail">${item.detail}</div>
+                    </div>
+                    ${item.status === 'Success' ? `<a href="${item.url}" target="_blank"><i class="material-icons">open_in_new</i></a>` : ''}
+                </div>
+            `).join('')}
+        </div>
+
+        <button id="copyBtn" class="fab">
+            <i class="material-icons">content_copy</i>
+            Copy All Links
+        </button>
+
+        <textarea id="clipboard-shim"></textarea>
+
+        <script>
+            const results = ${JSON.stringify(results)};
+            
+            document.getElementById('copyBtn').addEventListener('click', () => {
+                const links = results
+                    .filter(r => r.status === 'Success')
+                    .map(r => r.url)
+                    .join('\\n');
+                
+                const shim = document.getElementById('clipboard-shim');
+                shim.value = links;
+                shim.select();
+                document.execCommand('copy');
+                
+                const btn = document.getElementById('copyBtn');
+                btn.innerHTML = '<i class="material-icons">done</i> Copied!';
+                setTimeout(() => {
+                    btn.innerHTML = '<i class="material-icons">content_copy</i> Copy All Links';
+                }, 2000);
+            });
+        </script>
+    </body>
+    </html>
+    `;
+    pm.visualizer.set(template);
+}
+
+// Start execution
+initiateBatch();
