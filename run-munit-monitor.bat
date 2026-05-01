@@ -8,56 +8,63 @@ SET RULES_FILE=%CD%\munit-leak-detector.btm
 SET PROJECT_LIST=projects.csv
 SET LOG_DIR=%CD%\audit_logs
 
-:: Create log directory if it doesn't exist
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
 :: Verify Byteman exists
 if not exist "%AGENT_JAR%" (
-    echo [ERROR] Byteman agent not found at %AGENT_JAR%. Please check BYTEMAN_HOME.
+    echo [ERROR] Byteman agent not found.
     exit /b 1
 )
 
 :: --- BYTEMAN & MULE OPTIONS ---
-:: These flags force the forked MUnit JVM to use the agent and honor proxy properties
 SET BYTEMAN_OPTS=-javaagent:"%AGENT_JAR%"=script:"%RULES_FILE%"
 SET MULE_OPTS=-Dcom.ning.http.client.AsyncHttpClientConfig.useProxyProperties=true -Dmunit.strict.mode=true
 SET JAVA_TOOL_OPTIONS=%BYTEMAN_OPTS% %MULE_OPTS%
 
-echo [START] Starting batch audit for projects in %PROJECT_LIST%
-echo ---------------------------------------------------------
+echo =========================================================
+echo STARTING MUNIT LEAK AUDIT
+echo =========================================================
 
-:: --- ITERATE THROUGH PROJECTS ---
 for /f "tokens=*" %%P in (%PROJECT_LIST%) do (
     SET REPO_NAME=%%P
-    echo [PROCESS] Processing Repository: !REPO_NAME!
+    SET CURRENT_LOG=%LOG_DIR%\!REPO_NAME!_audit.log
     
+    echo [!REPO_NAME!] - STEP 1: Syncing Git...
     if exist "!REPO_NAME!" (
         cd "!REPO_NAME!"
-        
-        :: --- GIT OPERATIONS ---
-        echo [GIT] Resetting and updating !REPO_NAME! on branch dev...
         git reset --hard >nul 2>&1
         git checkout dev >nul 2>&1
-        git fetch origin >nul 2>&1
         git pull origin dev >nul 2>&1
         
-        :: --- MAVEN EXECUTION ---
-        echo [MUNIT] Running tests and monitoring for leaks...
-        call mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report "-Denv=dev" -Dmaven.clean.failOnError=false > "%LOG_DIR%\!REPO_NAME!_audit.log" 2>&1
+        echo [!REPO_NAME!] - STEP 2: Running MUnit (Please wait)...
+        :: Run Maven and redirect to log file
+        call mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report "-Denv=dev" -Dmaven.clean.failOnError=false > "!CURRENT_LOG!" 2>&1
         
-        if !ERRORLEVEL! EQU 0 (
-            echo [SUCCESS] Tests passed for !REPO_NAME!
+        :: Capture the exit code
+        SET MAVEN_EXIT=!ERRORLEVEL!
+
+        :: --- TERMINAL REPORTING ---
+        if !MAVEN_EXIT! EQU 0 (
+            echo [!REPO_NAME!] - RESULT: BUILD SUCCESS
         ) else (
-            echo [WARNING] Tests failed or Leaks detected in !REPO_NAME!. Check log: %LOG_DIR%\!REPO_NAME!_audit.log
+            echo [!REPO_NAME!] - RESULT: BUILD FAILURE (Exit Code: !MAVEN_EXIT!)
+        )
+
+        :: --- INSTANT LEAK DETECTION IN TERMINAL ---
+        echo [!REPO_NAME!] - SCANNING FOR LEAKS...
+        findstr /C:"[OUTBOUND-LEAK]" "!CURRENT_LOG!"
+        if !ERRORLEVEL! EQU 0 (
+            echo [!] ALERT: Outbound leaks detected in !REPO_NAME!. See logs for details.
+        ) else (
+            echo [OK] No outbound leaks found in !REPO_NAME!.
         )
         
-        :: Return to root directory for next iteration
         cd ..
     ) else (
-        echo [ERROR] Directory !REPO_NAME! not found. Skipping.
+        echo [!REPO_NAME!] - ERROR: Directory not found.
     )
     echo ---------------------------------------------------------
 )
 
-echo [FINISH] All projects processed.
+echo AUDIT FINISHED.
 ENDLOCAL
