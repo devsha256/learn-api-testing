@@ -8,18 +8,27 @@ SET "RULES_FILE=%CD%\munit-leak-detector.btm"
 SET "PROJECT_LIST=projects.csv"
 SET "LOG_DIR=%CD%\audit_logs"
 
+:: Ensure directories exist
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 
-:: --- BYTEMAN & MULE OPTIONS ---
+:: Verify Byteman presence
+if not exist "%AGENT_JAR%" (
+    echo [ERROR] Byteman agent not found at %AGENT_JAR%
+    echo Please ensure BYTEMAN_HOME is correct.
+    exit /b 1
+)
+
+:: --- INSTRUMENTATION SETUP ---
+:: These options are passed to the forked MUnit JVM
 SET "BYTEMAN_OPTS=-javaagent:"%AGENT_JAR%"=script:"%RULES_FILE%""
 SET "MULE_OPTS=-Dcom.ning.http.client.AsyncHttpClientConfig.useProxyProperties=true -Dmunit.strict.mode=true"
 SET "JAVA_TOOL_OPTIONS=%BYTEMAN_OPTS% %MULE_OPTS%"
 
 echo =========================================================
-echo STARTING MUNIT LEAK AUDIT WITH LIVE MONITORING
+echo STARTING MUNIT LEAK AUDIT (STABLE VERSION)
 echo =========================================================
 
-:: Standard loop that calls a labeled subroutine to avoid parsing errors
+:: Iterate through the CSV using a label-call to keep the parser clean
 for /f "usebackq tokens=*" %%P in ("%PROJECT_LIST%") do (
     call :ProcessProject "%%P"
 )
@@ -27,7 +36,6 @@ for /f "usebackq tokens=*" %%P in ("%PROJECT_LIST%") do (
 echo =========================================================
 echo AUDIT FINISHED.
 echo =========================================================
-pause
 exit /b
 
 :: --- SUBROUTINE: PROCESS EACH PROJECT ---
@@ -40,37 +48,42 @@ echo [*] Project: %REPO_NAME%
 if exist "%REPO_NAME%" (
     pushd "%REPO_NAME%"
     
-    echo     - Step 1: Syncing Git...
+    :: Step 1: Git Sync
+    echo     - Syncing Git (dev)...
     git reset --hard >nul 2>&1
     git checkout dev >nul 2>&1
     git pull origin dev >nul 2>&1
     
-    echo     - Step 2: Running MUnit (Live Output)...
+    :: Step 2: Maven Execution via PowerShell (for live Tee-Object output)
+    echo     - Executing MUnit...
     echo ---------------------------------------------------------
     
-    :: Logic is now outside the FOR loop block, preventing "unexpected at this time"
-    powershell -Command "mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report '-Denv=dev' -Dmaven.clean.failOnError=false | Tee-Object -FilePath '%CURRENT_LOG%'"
+    :: This specific line is protected by being outside the main FOR loop
+    powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+        "mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report '-Denv=dev' -Dmaven.clean.failOnError=false | Tee-Object -FilePath '%CURRENT_LOG%'"
     
     SET "MAVEN_EXIT=%ERRORLEVEL%"
     echo ---------------------------------------------------------
 
+    :: Result Reporting
     if !MAVEN_EXIT! EQU 0 (
         echo     - Result: BUILD SUCCESS
     ) else (
         echo     - Result: BUILD FAILURE
     )
 
-    echo     - Final Leak Scan...
+    :: Leak Detection
+    echo     - Scanning Log for Outbound Leaks...
     findstr /C:"[OUTBOUND-LEAK]" "%CURRENT_LOG%"
     if %ERRORLEVEL% EQU 0 (
-        echo     [!] ALERT: Leaks detected in %REPO_NAME%.
+        echo     [!] ALERT: Leak detected.
     ) else (
         echo     [OK] No leaks found.
     )
     
     popd
 ) else (
-    echo [ERROR] Directory %REPO_NAME% not found.
+    echo [ERROR] Folder "%REPO_NAME%" not found.
 )
 echo ---------------------------------------------------------
 goto :eof
