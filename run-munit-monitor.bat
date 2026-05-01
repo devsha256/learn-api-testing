@@ -19,6 +19,7 @@ echo =========================================================
 echo STARTING MUNIT LEAK AUDIT WITH LIVE MONITORING
 echo =========================================================
 
+:: Iterate through the CSV
 for /f "usebackq tokens=*" %%P in ("%PROJECT_LIST%") do (
     SET "REPO_NAME=%%P"
     SET "CURRENT_LOG=%LOG_DIR%\%%P_audit.log"
@@ -33,29 +34,27 @@ for /f "usebackq tokens=*" %%P in ("%PROJECT_LIST%") do (
         git checkout dev >nul 2>&1
         git pull origin dev >nul 2>&1
         
-        echo     - Step 2: Running MUnit (Live Output Below)...
+        echo     - Step 2: Running MUnit (Live Output)...
         echo ---------------------------------------------------------
         
-        :: Using PowerShell Tee-Object to show output on screen AND save to file
-        powershell -Command "mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report '-Denv=dev' -Dmaven.clean.failOnError=false | Tee-Object -FilePath '!CURRENT_LOG!'"
+        :: CRITICAL FIX: The pipe character is escaped with ^| to prevent CMD parsing errors
+        powershell -Command "mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report '-Denv=dev' -Dmaven.clean.failOnError=false ^| Tee-Object -FilePath '!CURRENT_LOG!'"
         
         SET "MAVEN_EXIT=!ERRORLEVEL!"
         echo ---------------------------------------------------------
 
-        :: Report Result based on Exit Code
         if !MAVEN_EXIT! EQU 0 (
             echo     - Result: BUILD SUCCESS
         ) else (
             echo     - Result: BUILD FAILURE
         )
 
-        :: Scan the saved log specifically for Byteman leak messages
         echo     - Final Leak Scan...
         findstr /C:"[OUTBOUND-LEAK]" "!CURRENT_LOG!"
         if !ERRORLEVEL! EQU 0 (
-            echo     [!] ALERT: Leaks were detected during the run.
+            echo     [!] ALERT: Leaks detected.
         ) else (
-            echo     [OK] No outbound leaks detected.
+            echo     [OK] No leaks found.
         )
         
         popd
