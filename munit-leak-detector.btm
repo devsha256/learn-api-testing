@@ -1,10 +1,8 @@
 # #########################################################################
-# MUNIT LEAK DETECTOR - ULTIMATE ENTERPRISE EDITION
-# Covers: HTTP, JMS, DB, SFTP, S3, SAP, Salesforce, LDAP, SMTP
+# MUNIT LEAK DETECTOR - ULTIMATE ENTERPRISE EDITION (FIXED SYNTAX)
 # #########################################################################
 
-# 1. THE LOW-LEVEL TCP TRAP (The "No-Escape" Rule)
-# This catches the actual connection regardless of the protocol.
+# 1. THE LOW-LEVEL TCP TRAP
 RULE Universal TCP Connect
 CLASS java.net.AbstractPlainSocketImpl
 METHOD connect(java.net.InetAddress, int, int)
@@ -17,7 +15,7 @@ DO
     traceln("[OUTBOUND-LEAK] PROTOCOL=TCP_RAW DEST=" + host + ":" + port + " THREAD=" + Thread.currentThread().getName());
 ENDRULE
 
-# 2. THE NIO/NETTY TRAP (S3, Salesforce, High-Perf HTTP)
+# 2. THE NIO/NETTY TRAP
 RULE Universal NIO Connect
 CLASS sun.nio.ch.SocketChannelImpl
 METHOD connect(java.net.SocketAddress)
@@ -29,6 +27,7 @@ DO
 ENDRULE
 
 # 3. MULE HTTP INTERFACE (S3 / REST)
+RULE Trace Mule HTTP Interface
 INTERFACE org.mule.runtime.http.api.client.HttpClient
 METHOD send(org.mule.runtime.http.api.domain.message.request.HttpRequest, org.mule.runtime.http.api.client.HttpRequestOptions)
 AT ENTRY
@@ -55,6 +54,7 @@ DO
 ENDRULE
 
 # 6. UNIVERSAL JDBC/DB TRAP
+RULE Trace JDBC Driver
 INTERFACE java.sql.Driver
 METHOD connect(java.lang.String, java.util.Properties)
 AT ENTRY
