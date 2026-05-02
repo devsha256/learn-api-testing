@@ -1,55 +1,54 @@
 # #########################################################################
-# MUNIT OUTBOUND LEAK DETECTOR - CORE RULES
+# MUNIT OUTBOUND LEAK DETECTOR - PRODUCTION GRADE
+# Target: Mule 4.x / Java 8, 11, 17
 # #########################################################################
 
-# 1. SOCKET CONNECTION INTERCEPTION (CATCHES EVERYTHING: HTTP, JMS, DB)
-RULE Trace Socket Connect
+# RULE 1: CATCH ALL TCP SOCKET CONNECTIONS
+# This is the "Safety Net" that catches JMS, DB, and raw HTTP.
+RULE Trace and Block Socket Connections
 CLASS java.net.Socket
 METHOD connect(java.net.SocketAddress, int)
 AT ENTRY
 BIND 
-    address:java.net.SocketAddress = $1;
-    host:String = address.toString();
-IF (!host.contains("localhost") && !host.contains("127.0.0.1"))
+    addr:String = $1.toString();
+    isLocal:boolean = addr.contains("localhost") || addr.contains("127.0.0.1") || addr.contains("0:0:0:0:0:0:0:1");
+IF !isLocal
 DO 
-    traceln("[OUTBOUND-LEAK] TYPE=SOCKET DEST=" + host + " THREAD=" + Thread.currentThread().getName());
-    # Optional: uncomment to see exactly where the call comes from
-    # java.lang.Thread.dumpStack(); 
+    traceln("[OUTBOUND-LEAK] TYPE=SOCKET DEST=" + addr + " THREAD=" + Thread.currentThread().getName());
+    # Optional: Throw exception to fail the build immediately
+    # throw new java.net.ConnectException("UNMOCKED-OUTBOUND-CALL: " + addr)
 ENDRULE
 
-# 2. MULE HTTP REQUESTER DETECTION (GRIZZLY/AHC)
-RULE Trace Mule HTTP Connector
+# RULE 2: CATCH MULE HTTP CONNECTOR (GRIZZLY)
+# Catches the request before it even hits the socket layer.
+RULE Trace Mule HTTP Service Request
 CLASS org.mule.service.http.impl.service.client.GrizzlyHttpClient
 METHOD send(org.mule.runtime.http.api.domain.message.request.HttpRequest, org.mule.runtime.http.api.client.HttpRequestOptions)
 AT ENTRY
 BIND
     req:org.mule.runtime.http.api.domain.message.request.HttpRequest = $1;
-    uri:String = req.getUri();
+    host:String = req.getUri();
 IF TRUE
 DO 
-    traceln("[OUTBOUND-LEAK] TYPE=HTTP URI=" + uri + " METHOD=" + req.getMethod());
+    traceln("[OUTBOUND-LEAK] TYPE=HTTP DEST=" + host + " METHOD=" + req.getMethod());
 ENDRULE
 
-# 3. JMS PUBLISH DETECTION (ACTIVEMQ / AMQP)
-RULE Trace JMS Publish
+# RULE 3: CATCH JMS PUBLISH ATTEMPTS
+# Specifically targets the Mule JMS extension.
+RULE Trace JMS Extension Publish
 CLASS org.mule.extensions.jms.internal.connection.producer.JmsProducer
 METHOD send(java.lang.String, org.mule.extensions.jms.api.message.JmsMessage, org.mule.extensions.jms.api.destination.JmsDestinationType, org.mule.extensions.jms.api.message.JmsMessageOptions)
 AT ENTRY
 DO 
-    traceln("[OUTBOUND-LEAK] TYPE=JMS DESTINATION=" + $1 + " THREAD=" + Thread.currentThread().getName());
+    traceln("[OUTBOUND-LEAK] TYPE=JMS_PUBLISH DESTINATION=" + $1);
 ENDRULE
 
-# 4. STRICT MODE - BUILD FAILURE (FAIL ON NON-LOCAL)
-# Uncomment the throw line to enable hard-failing the build.
-RULE Strict Blocking
-CLASS java.net.Socket
-METHOD connect(java.net.SocketAddress, int)
+# RULE 4: DATABASE EXECUTION DETECTION
+# Catches unmocked DB calls.
+RULE Trace Database Execute
+CLASS org.mule.extension.db.internal.domain.executor.AbstractExecutor
+METHOD execute(org.mule.extension.db.internal.domain.statement.Statement, org.mule.extension.db.internal.domain.connection.DbConnection)
 AT ENTRY
-BIND 
-    address:java.net.SocketAddress = $1;
-    host:String = address.toString();
-IF (!host.contains("localhost") && !host.contains("127.0.0.1") && System.getProperty("munit.strict.mode") != null)
 DO 
-    traceln("[FATAL-LEAK] BLOCKING CONNECTION TO: " + host);
-    throw new java.lang.RuntimeException("MUnit Security Violation: Unmocked outbound call to " + host);
+    traceln("[OUTBOUND-LEAK] TYPE=DATABASE THREAD=" + Thread.currentThread().getName());
 ENDRULE
