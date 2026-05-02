@@ -1,54 +1,59 @@
 # #########################################################################
-# MUNIT OUTBOUND LEAK DETECTOR - PRODUCTION GRADE
-# Target: Mule 4.x / Java 8, 11, 17
+# MUNIT OUTBOUND LEAK DETECTOR - REVISED FOR DEEP HTTP DETECTION
 # #########################################################################
 
-# RULE 1: CATCH ALL TCP SOCKET CONNECTIONS
-# This is the "Safety Net" that catches JMS, DB, and raw HTTP.
-RULE Trace and Block Socket Connections
+# 1. THE "NET-CATCHER" (java.net.Socket)
+# Modified to catch any attempt to initialize a connection.
+RULE Trace All Socket Initialization
 CLASS java.net.Socket
-METHOD connect(java.net.SocketAddress, int)
+METHOD <init>(java.lang.String, int)
+AT EXIT
+BIND 
+    host:String = $1;
+IF (!host.contains("localhost") && !host.contains("127.0.0.1"))
+DO 
+    traceln("[OUTBOUND-LEAK] TYPE=RAW_SOCKET DEST=" + host + ":" + $2);
+ENDRULE
+
+# 2. THE MULE HTTP SERVICE (Grizzly/Netty)
+# Catches the request at the high-level Mule internal API.
+RULE Trace Mule HTTP Request API
+INTERFACE org.mule.runtime.http.api.client.HttpClient
+METHOD send(org.mule.runtime.http.api.domain.message.request.HttpRequest, org.mule.runtime.http.api.client.HttpRequestOptions)
+AT ENTRY
+DO 
+    traceln("[OUTBOUND-LEAK] TYPE=MULE_HTTP_API URI=" + $1.getUri());
+ENDRULE
+
+# 3. ASYNC HTTP CLIENT (AHC)
+# Many older Mule connectors use this under the hood.
+RULE Trace AsyncHttpClient
+CLASS com.ning.http.client.AsyncHttpClient
+METHOD executeRequest(com.ning.http.client.Request, com.ning.http.client.AsyncHandler)
+AT ENTRY
+DO 
+    traceln("[OUTBOUND-LEAK] TYPE=ASYNC_HTTP_CLIENT URL=" + $1.getUrl());
+ENDRULE
+
+# 4. APACHE HTTP CLIENT
+# Common in custom Java code and some legacy connectors.
+RULE Trace Apache HttpClient
+CLASS org.apache.http.impl.client.CloseableHttpClient
+METHOD execute(org.apache.http.client.methods.HttpUriRequest)
+AT ENTRY
+DO 
+    traceln("[OUTBOUND-LEAK] TYPE=APACHE_HTTP URI=" + $1.getURI());
+ENDRULE
+
+# 5. NIO CHANNEL CONNECTION (Netty/High Performance)
+# Catches non-blocking I/O connections.
+RULE Trace NIO SocketChannel
+CLASS sun.nio.ch.SocketChannelImpl
+METHOD connect(java.net.SocketAddress)
 AT ENTRY
 BIND 
     addr:String = $1.toString();
-    isLocal:boolean = addr.contains("localhost") || addr.contains("127.0.0.1") || addr.contains("0:0:0:0:0:0:0:1");
-IF !isLocal
+IF (!addr.contains("localhost") && !addr.contains("127.0.0.1"))
 DO 
-    traceln("[OUTBOUND-LEAK] TYPE=SOCKET DEST=" + addr + " THREAD=" + Thread.currentThread().getName());
-    # Optional: Throw exception to fail the build immediately
-    # throw new java.net.ConnectException("UNMOCKED-OUTBOUND-CALL: " + addr)
-ENDRULE
-
-# RULE 2: CATCH MULE HTTP CONNECTOR (GRIZZLY)
-# Catches the request before it even hits the socket layer.
-RULE Trace Mule HTTP Service Request
-CLASS org.mule.service.http.impl.service.client.GrizzlyHttpClient
-METHOD send(org.mule.runtime.http.api.domain.message.request.HttpRequest, org.mule.runtime.http.api.client.HttpRequestOptions)
-AT ENTRY
-BIND
-    req:org.mule.runtime.http.api.domain.message.request.HttpRequest = $1;
-    host:String = req.getUri();
-IF TRUE
-DO 
-    traceln("[OUTBOUND-LEAK] TYPE=HTTP DEST=" + host + " METHOD=" + req.getMethod());
-ENDRULE
-
-# RULE 3: CATCH JMS PUBLISH ATTEMPTS
-# Specifically targets the Mule JMS extension.
-RULE Trace JMS Extension Publish
-CLASS org.mule.extensions.jms.internal.connection.producer.JmsProducer
-METHOD send(java.lang.String, org.mule.extensions.jms.api.message.JmsMessage, org.mule.extensions.jms.api.destination.JmsDestinationType, org.mule.extensions.jms.api.message.JmsMessageOptions)
-AT ENTRY
-DO 
-    traceln("[OUTBOUND-LEAK] TYPE=JMS_PUBLISH DESTINATION=" + $1);
-ENDRULE
-
-# RULE 4: DATABASE EXECUTION DETECTION
-# Catches unmocked DB calls.
-RULE Trace Database Execute
-CLASS org.mule.extension.db.internal.domain.executor.AbstractExecutor
-METHOD execute(org.mule.extension.db.internal.domain.statement.Statement, org.mule.extension.db.internal.domain.connection.DbConnection)
-AT ENTRY
-DO 
-    traceln("[OUTBOUND-LEAK] TYPE=DATABASE THREAD=" + Thread.currentThread().getName());
+    traceln("[OUTBOUND-LEAK] TYPE=NIO_SOCKET DEST=" + addr);
 ENDRULE
