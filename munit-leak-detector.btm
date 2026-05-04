@@ -21,7 +21,12 @@ CLASS sun.nio.ch.SocketChannelImpl
 METHOD connect(java.net.SocketAddress)
 AT ENTRY
 BIND addr:String = $1.toString();
-IF (!addr.contains("127.0.0.1") && !addr.contains("localhost"))
+# Filter out localhost, 127.0.0.1, and local Windows Pipe/Socket files
+IF (!addr.contains("127.0.0.1") && 
+    !addr.contains("localhost") && 
+    !addr.contains("0:0:0:0:0:0:0:1") &&
+    !addr.contains("Users") && 
+    !addr.contains("AppData"))
 DO 
     traceln("[OUTBOUND-LEAK] PROTOCOL=NIO_TCP DEST=" + addr);
 ENDRULE
