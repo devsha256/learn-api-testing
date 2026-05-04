@@ -1,86 +1,110 @@
 # =========================================================
-# CONFIGURATION BLOCK - ONLY EDIT THESE PATHS
+# CONFIGURATION
 # =========================================================
-$BytemanHome = "C:/tools/byteman-download-4.0.20"
-$RulesFile   = "C:/path/to/munit-leak-detector.btm"
-$RootFolder  = "C:/Users/Saddam/Projects"
-$ProjectList = "C:/path/to/projects.csv"
-$LogDir      = "$PSScriptRoot/audit_logs"
+$BytemanHome   = "C:/tools/byteman-download-4.0.20"
+$RulesFile     = "C:/path/to/munit-leak-detector.btm"
+$RootFolder    = "C:/Users/Saddam/Projects"
+$ProjectList   = "C:/path/to/projects.csv"
+$LogDir        = "$PSScriptRoot/audit_logs"
+$CSVReportPath = "$PSScriptRoot/Audit_Summary.csv"
+$MaxThreads    = 4  
+$BasePort      = 9000
 # =========================================================
 
-# --- INTERNAL SETUP ---
+if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
 $AgentJar = "$BytemanHome/lib/byteman.jar"
 
-# Ensure Log Directory exists
-if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+# Read Projects
+$Projects = Get-Content $ProjectList | Where-Object { ![string]::IsNullOrWhiteSpace($_) }
 
-# --- JVM INSTRUMENTATION SETUP ---
-# We use backticks (`) to escape quotes inside the string for PowerShell
-$BytemanOpts = "-javaagent:`"$AgentJar`"=script:`"$RulesFile`""
-$BootPath    = "-Xbootclasspath/a:`"$AgentJar`""
-$MuleOpts    = "-Dorg.jboss.byteman.transform.all -Dcom.ning.http.client.AsyncHttpClientConfig.useProxyProperties=true"
+Write-Host "Starting Parallel Audit with CSV Reporting..." -ForegroundColor Cyan
 
-# Set environment variable for the forked MUnit process
-$env:JAVA_TOOL_OPTIONS = "$BytemanOpts $BootPath $MuleOpts"
+$Jobs = @()
 
-Write-Host "=========================================================" -ForegroundColor Cyan
-Write-Host "STARTING MUNIT LEAK AUDIT" -ForegroundColor Cyan
-Write-Host "=========================================================" -ForegroundColor Cyan
+foreach ($index in 0..($Projects.Count - 1)) {
+    $ProjName = $Projects[$index].Trim()
+    
+    while (($Jobs | Where-Object { $_.State -eq 'Running' }).Count -ge $MaxThreads) {
+        Start-Sleep -Seconds 2
+    }
 
-# Read the project names from CSV
-$Projects = Get-Content $ProjectList
-
-foreach ($ProjName in $Projects) {
-    $ProjName = $ProjName.Trim()
-    if ([string]::IsNullOrWhiteSpace($ProjName)) { continue }
-
+    $JobPort = $BasePort + $index
     $FullProjectPath = Join-Path $RootFolder $ProjName
     $CurrentLog = Join-Path $LogDir "$($ProjName)_audit.log"
 
-    Write-Host "[*] Processing: $ProjName" -ForegroundColor Yellow
-
-    if (Test-Path $FullProjectPath) {
-        Push-Location $FullProjectPath
-
-        # Step 1: Git Sync
-        Write-Host "    - Updating Git (dev)..."
-        git reset --hard | Out-Null
-        git checkout dev | Out-Null
-        git pull origin dev | Out-Null
-
-        # Step 2: Maven Execution with Live Output via Tee-Object
-        Write-Host "    - Executing MUnit..."
-        Write-Host "---------------------------------------------------------"
+    $Jobs += Start-ThreadJob -ArgumentList $ProjName, $FullProjectPath, $CurrentLog, $AgentJar, $RulesFile, $JobPort -ScriptBlock {
+        param($Name, $Path, $Log, $Jar, $Rules, $Port)
         
-        # Calling mvn via powershell ensures the pipe (|) is handled correctly
-        mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report "-Denv=dev" "-Dmaven.clean.failOnError=false" | Tee-Object -FilePath $CurrentLog
-        
-        $MavenExit = $LASTEXITCODE
-        Write-Host "---------------------------------------------------------"
+        $env:JAVA_TOOL_OPTIONS = "-javaagent:`"$Jar`"=script:`"$Rules`" -Xbootclasspath/a:`"$Jar`" -Dorg.jboss.byteman.transform.all"
 
-        # Step 3: Result & Leak Scan
-        if ($MavenExit -eq 0) {
-            Write-Host "    - Result: BUILD SUCCESS" -ForegroundColor Green
-        } else {
-            Write-Host "    - Result: BUILD FAILURE" -ForegroundColor Red
+        if (Test-Path $Path) {
+            try {
+                Push-Location $Path
+                git reset --hard | Out-Null
+                git checkout dev | Out-Null
+                git pull origin dev | Out-Null
+
+                # -B for batch mode avoids progress bar noise in logs
+                mvn clean test -B "-Denv=dev" "-Dhttp.port=$Port" "-Dmunit.dynamic.port=$Port" "-Dmaven.clean.failOnError=false" > $Log 2>&1
+                
+                return [PSCustomObject]@{ Project = $Name; LogPath = $Log; Success = $true }
+            } catch {
+                return [PSCustomObject]@{ Project = $Name; LogPath = $Log; Success = $false }
+            } finally {
+                Pop-Location
+            }
         }
-
-        # Scanning the log we just saved
-        $Leaks = Select-String -Path $CurrentLog -Pattern "\[OUTBOUND-LEAK\]"
-        if ($Leaks) {
-            Write-Host "    [!] ALERT: Outbound Leaks Detected!" -ForegroundColor Magenta
-            $Leaks | ForEach-Object { Write-Host "        $($_.Line)" }
-        } else {
-            Write-Host "    [OK] No outbound leaks found." -ForegroundColor Green
-        }
-
-        Pop-Location
-    } else {
-        Write-Host "[ERROR] Directory not found: $FullProjectPath" -ForegroundColor Red
     }
-    Write-Host "========================================================="
+    Write-Host "[+] Queued: $ProjName" -ForegroundColor Gray
 }
 
-# Cleanup
-$env:JAVA_TOOL_OPTIONS = ""
-Write-Host "AUDIT COMPLETE. ALL LOGS SAVED TO: $LogDir" -ForegroundColor Cyan
+Write-Host "Waiting for all jobs to finish..." -ForegroundColor Yellow
+$JobResults = $Jobs | Wait-Job | Receive-Job
+
+# =========================================================
+# PHASE: GENERATE CSV REPORT
+# =========================================================
+Write-Host "Generating CSV Summary Report..." -ForegroundColor Cyan
+
+$FinalReport = New-Object System.Collections.Generic.List[PSObject]
+
+foreach ($result in $JobResults) {
+    if ($result.Success -and (Test-Path $result.LogPath)) {
+        # Find all lines containing the leak tag
+        $leakLines = Select-String -Path $result.LogPath -Pattern "\[OUTBOUND-LEAK\]"
+        
+        if ($leakLines) {
+            foreach ($line in $leakLines) {
+                # Clean up the log line to extract just the Protocol/Dest info
+                $cleanDetail = $line.Line.Substring($line.Line.IndexOf("] ") + 2).Trim()
+                
+                $FinalReport.Add([PSCustomObject]@{
+                    Application = $result.Project
+                    Status      = "LEAK DETECTED"
+                    Details     = $cleanDetail
+                    Timestamp   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+                })
+            }
+        } else {
+            $FinalReport.Add([PSCustomObject]@{
+                Application = $result.Project
+                Status      = "CLEAN"
+                Details     = "No unmocked outbound calls found."
+                Timestamp   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+            })
+        }
+    } else {
+        $FinalReport.Add([PSCustomObject]@{
+            Application = $result.Project
+            Status      = "ERROR"
+            Details     = "Maven build failed or project path invalid."
+            Timestamp   = (Get-Date -Format "yyyy-MM-dd HH:mm:ss")
+        })
+    }
+}
+
+# Export to CSV
+$FinalReport | Export-Csv -Path $CSVReportPath -NoTypeInformation -Encoding UTF8
+
+Write-Host "`nAUDIT COMPLETE." -ForegroundColor Cyan
+Write-Host "Summary Report saved to: $CSVReportPath" -ForegroundColor Green
