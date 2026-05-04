@@ -1,31 +1,31 @@
-###########################################################################
+###############################################################################
 # MULESOFT MUNIT OUTBOUND LEAK DETECTOR
-# Enterprise-grade Byteman Rules
+# FULL ENTERPRISE RULESET
 #
 # PURPOSE:
 # Detect ANY unintended outbound operation during MUnit execution.
 #
 # TARGETS:
-# - HTTP/HTTPS
+# - HTTP / HTTPS
 # - JMS
-# - AMQP
+# - Netty
+# - NIO
 # - JDBC
-# - SFTP/FTP
-# - Socket/TCP
-# - Netty/NIO
+# - SFTP / FTP
+# - SMTP
+# - LDAP
+# - Redis
 # - Mule HTTP Connector
-# - Mule JMS Connector
-# - Mule DB Connector
+# - Async HTTP Client
+# - Reactor Netty
+# - AWS SDK
 # - Salesforce
 # - SAP
-# - AWS SDK/S3
 #
-# DESIGN PRINCIPLES:
-# - Generic > vendor specific
-# - Detect actual runtime leakage
-# - Avoid fragile Mule internal signatures
-# - Work across Mule 4.x variants
-# - Compatible with Java 8/11/17
+# COMPATIBILITY:
+# - Mule 4.x
+# - Java 8 / 11 / 17
+# - Windows/Linux/macOS
 #
 # REQUIRED JVM FLAGS:
 #
@@ -33,23 +33,15 @@
 # -Dorg.jboss.byteman.verbose=true
 # -Dorg.jboss.byteman.debug=true
 #
-###########################################################################
+# RECOMMENDED JAVA_TOOL_OPTIONS:
+#
+# -javaagent:path/to/byteman.jar=script:path/to/mule-leak-detector.btm
+#
+###############################################################################
 
-###########################################################################
-# UTILS
-###########################################################################
-
-RULE Startup Banner
-CLASS java.lang.System
-METHOD currentTimeMillis
-AT ENTRY
-IF FALSE
-DO traceln("[MUNIT-LEAK-DETECTOR] ACTIVE")
-ENDRULE
-
-###########################################################################
-# GENERIC SOCKET DETECTION
-###########################################################################
+###############################################################################
+# GLOBAL SOCKET SAFETY NET
+###############################################################################
 
 RULE Generic Socket Connect
 CLASS java.net.Socket
@@ -85,9 +77,23 @@ DO
     );
 ENDRULE
 
-###########################################################################
-# NIO / NETTY DETECTION
-###########################################################################
+###############################################################################
+# NIO SOCKETS
+###############################################################################
+
+RULE NIO SocketChannel Connect
+CLASS sun.nio.ch.SocketChannelImpl
+METHOD connect
+AT ENTRY
+DO
+    traceln(
+        "[OUTBOUND-LEAK] TYPE=NIO_SOCKET DEST=" + $1
+    );
+ENDRULE
+
+###############################################################################
+# NETTY DETECTION
+###############################################################################
 
 RULE Netty Bootstrap Connect
 CLASS io.netty.bootstrap.Bootstrap
@@ -99,7 +105,7 @@ DO
     );
 ENDRULE
 
-RULE Netty NIO Socket Connect
+RULE Netty NioSocketChannel Connect
 CLASS io.netty.channel.socket.nio.NioSocketChannel
 METHOD doConnect
 AT ENTRY
@@ -109,21 +115,35 @@ DO
     );
 ENDRULE
 
-RULE Java NIO SocketChannel
-CLASS sun.nio.ch.SocketChannelImpl
+RULE Netty Channel Connect
+CLASS io.netty.channel.AbstractChannel
 METHOD connect
 AT ENTRY
 DO
     traceln(
-        "[OUTBOUND-LEAK] TYPE=NIO_SOCKET DEST=" + $1
+        "[OUTBOUND-LEAK] TYPE=NETTY_CHANNEL DEST=" + $1
     );
 ENDRULE
 
-###########################################################################
-# SSL / TLS DETECTION
-###########################################################################
+###############################################################################
+# REACTOR NETTY
+###############################################################################
 
-RULE SSL Handshake Start
+RULE Reactor Netty Connect
+CLASS reactor.netty.transport.TransportConnector
+METHOD connect
+AT ENTRY
+DO
+    traceln(
+        "[OUTBOUND-LEAK] TYPE=REACTOR_NETTY DEST=" + $1
+    );
+ENDRULE
+
+###############################################################################
+# SSL / TLS
+###############################################################################
+
+RULE SSL Socket Handshake
 CLASS javax.net.ssl.SSLSocket
 METHOD startHandshake
 AT ENTRY
@@ -144,21 +164,22 @@ DO
     );
 ENDRULE
 
-###########################################################################
-# JAVA HTTP DETECTION
-###########################################################################
+###############################################################################
+# JAVA URL / URLCONNECTION
+###############################################################################
 
-RULE Java URL Connection
+RULE Java URL OpenConnection
 CLASS java.net.URL
 METHOD openConnection
 AT ENTRY
 DO
     traceln(
-        "[OUTBOUND-LEAK] TYPE=JAVA_URL DEST=" + $0
+        "[OUTBOUND-LEAK] TYPE=URL_CONNECTION URL=" +
+        $0.toString()
     );
 ENDRULE
 
-RULE HttpURLConnection Connect
+RULE Java HttpURLConnection Connect
 CLASS java.net.HttpURLConnection
 METHOD connect
 AT ENTRY
@@ -169,39 +190,64 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
+# JAVA 11+ HTTP CLIENT
+###############################################################################
+
+RULE Java11 HttpClient Send
+CLASS jdk.internal.net.http.HttpClientImpl
+METHOD send
+AT ENTRY
+DO
+    traceln(
+        "[OUTBOUND-LEAK] TYPE=JAVA11_HTTP"
+    );
+ENDRULE
+
+###############################################################################
 # APACHE HTTP CLIENT
-###########################################################################
+###############################################################################
 
 RULE Apache HttpClient Execute
-CLASS org.apache.http.impl.client.CloseableHttpClient
+CLASS org.apache.http.impl.execchain.MainClientExec
 METHOD execute
 AT ENTRY
 DO
     traceln(
-        "[OUTBOUND-LEAK] TYPE=APACHE_HTTP REQUEST=" +
+        "[OUTBOUND-LEAK] TYPE=APACHE_HTTP TARGET=" +
         $1
     );
 ENDRULE
 
-###########################################################################
-# ASYNC HTTP CLIENT
-###########################################################################
+###############################################################################
+# ASYNC HTTP CLIENT (MULE INTERNAL)
+###############################################################################
 
-RULE AsyncHttpClient Execute
+RULE AsyncHttpClient SendRequest
+CLASS org.asynchttpclient.netty.NettyRequestSender
+METHOD sendRequest
+AT ENTRY
+DO
+    traceln(
+        "[OUTBOUND-LEAK] TYPE=ASYNC_HTTP URI=" +
+        $2.getUri()
+    );
+ENDRULE
+
+RULE AsyncHttpClient ExecuteRequest
 CLASS org.asynchttpclient.DefaultAsyncHttpClient
 METHOD executeRequest
 AT ENTRY
 DO
     traceln(
-        "[OUTBOUND-LEAK] TYPE=ASYNC_HTTP REQUEST=" +
+        "[OUTBOUND-LEAK] TYPE=ASYNC_HTTP_EXEC REQUEST=" +
         $1
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # MULE HTTP CONNECTOR
-###########################################################################
+###############################################################################
 
 RULE Mule HTTP Client Send
 INTERFACE org.mule.runtime.http.api.client.HttpClient
@@ -214,7 +260,7 @@ DO
     );
 ENDRULE
 
-RULE Mule HTTP Request Operation
+RULE Mule HTTP Requester
 CLASS org.mule.extension.http.internal.request.HttpRequester
 METHOD doRequestWithRetry
 AT ENTRY
@@ -224,11 +270,11 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # JMS GENERIC
-###########################################################################
+###############################################################################
 
-RULE JMS Producer Send Generic
+RULE JMS Producer Send
 INTERFACE javax.jms.MessageProducer
 METHOD send
 AT ENTRY
@@ -260,9 +306,9 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # ACTIVEMQ CLASSIC
-###########################################################################
+###############################################################################
 
 RULE ActiveMQ Producer Send
 CLASS org.apache.activemq.ActiveMQMessageProducer
@@ -274,9 +320,9 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # ACTIVEMQ ARTEMIS
-###########################################################################
+###############################################################################
 
 RULE Artemis Producer Send
 CLASS org.apache.activemq.artemis.jms.client.ActiveMQMessageProducer
@@ -288,9 +334,9 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # IBM MQ
-###########################################################################
+###############################################################################
 
 RULE IBM MQ Put
 CLASS com.ibm.mq.MQQueue
@@ -302,9 +348,9 @@ DO
     );
 ENDRULE
 
-###########################################################################
-# AMQP
-###########################################################################
+###############################################################################
+# AMQP / RABBITMQ
+###############################################################################
 
 RULE RabbitMQ Publish
 CLASS com.rabbitmq.client.ChannelN
@@ -312,14 +358,14 @@ METHOD basicPublish
 AT ENTRY
 DO
     traceln(
-        "[OUTBOUND-LEAK] TYPE=RABBITMQ_PUBLISH EXCHANGE=" +
+        "[OUTBOUND-LEAK] TYPE=RABBITMQ EXCHANGE=" +
         $1 + " ROUTING_KEY=" + $2
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # JDBC
-###########################################################################
+###############################################################################
 
 RULE JDBC Driver Connect
 INTERFACE java.sql.Driver
@@ -338,16 +384,16 @@ METHOD getConnection
 AT ENTRY
 DO
     traceln(
-        "[OUTBOUND-LEAK] TYPE=DATASOURCE_CONNECTION CLASS=" +
+        "[OUTBOUND-LEAK] TYPE=DATASOURCE CLASS=" +
         $0.getClass().getName()
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # MULE DB CONNECTOR
-###########################################################################
+###############################################################################
 
-RULE Mule DB Operation
+RULE Mule DB Execute
 CLASS org.mule.extension.db.internal.operation.DbDmlOperations
 METHOD execute
 AT ENTRY
@@ -357,9 +403,9 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # SFTP / FTP
-###########################################################################
+###############################################################################
 
 RULE JSCH Session Connect
 CLASS com.jcraft.jsch.Session
@@ -372,7 +418,7 @@ DO
     );
 ENDRULE
 
-RULE Apache FTP Connect
+RULE FTP Connect
 CLASS org.apache.commons.net.ftp.FTPClient
 METHOD connect
 AT ENTRY
@@ -382,9 +428,9 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # AWS SDK / S3
-###########################################################################
+###############################################################################
 
 RULE AWS SDK Execute
 CLASS software.amazon.awssdk.core.client.handler.BaseSyncClientHandler
@@ -397,11 +443,11 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # SALESFORCE
-###########################################################################
+###############################################################################
 
-RULE Salesforce HTTP Transport
+RULE Salesforce Transport
 CLASS com.sforce.ws.transport.JdkHttpTransport
 METHOD createConnection
 AT ENTRY
@@ -412,9 +458,9 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # SAP
-###########################################################################
+###############################################################################
 
 RULE SAP JCO Connect
 CLASS com.sap.conn.jco.rt.DefaultConnection
@@ -426,11 +472,11 @@ DO
     );
 ENDRULE
 
-###########################################################################
-# SMTP / EMAIL
-###########################################################################
+###############################################################################
+# SMTP
+###############################################################################
 
-RULE JavaMail Transport Connect
+RULE JavaMail Connect
 CLASS javax.mail.Service
 METHOD connect
 AT ENTRY
@@ -441,25 +487,26 @@ DO
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # LDAP
-###########################################################################
+###############################################################################
 
-RULE LDAP Context Init
+RULE LDAP InitialContext
 CLASS javax.naming.directory.InitialDirContext
 METHOD <init>
 AT ENTRY
 DO
     traceln(
-        "[OUTBOUND-LEAK] TYPE=LDAP ENV=" + $1
+        "[OUTBOUND-LEAK] TYPE=LDAP ENV=" +
+        $1
     );
 ENDRULE
 
-###########################################################################
+###############################################################################
 # REDIS
-###########################################################################
+###############################################################################
 
-RULE Redis Connection
+RULE Redis Connect
 CLASS redis.clients.jedis.Connection
 METHOD connect
 AT ENTRY
@@ -469,27 +516,28 @@ DO
     );
 ENDRULE
 
-###########################################################################
-# OPTIONAL STRICT BLOCK MODE
+###############################################################################
+# OPTIONAL STRICT MODE
 #
-# Uncomment to FAIL builds on outbound calls.
-###########################################################################
+# Uncomment to FAIL builds immediately when outbound calls occur.
+###############################################################################
 
 # RULE Block External Socket
 # CLASS java.net.Socket
 # METHOD connect
 # AT ENTRY
-# BIND addr:String = String.valueOf($1);
+# BIND
+#     addr:String = String.valueOf($1);
 # IF (
-#   !addr.contains("127.0.0.1") &&
-#   !addr.contains("localhost")
+#     !addr.contains("127.0.0.1") &&
+#     !addr.contains("localhost")
 # )
 # DO
-#   throw new RuntimeException(
-#     "OUTBOUND CONNECTION DETECTED -> " + addr
-#   );
+#     throw new RuntimeException(
+#         "OUTBOUND CONNECTION DETECTED -> " + addr
+#     );
 # ENDRULE
 
-###########################################################################
-# END
-###########################################################################
+###############################################################################
+# END OF FILE
+###############################################################################
