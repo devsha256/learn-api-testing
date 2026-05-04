@@ -1,9 +1,9 @@
 # #########################################################################
-# MUNIT LEAK DETECTOR - CUMULATIVE MASTER VERSION
-# Includes: TCP, NIO, HTTP, JMS, JDBC, SAP, Salesforce, S3, SFTP
+# MUNIT LEAK DETECTOR - ARCHITECT LEVEL (ZERO-GAPS)
+# Includes: TCP, NIO, HTTP, JMS, JDBC, SAP, Salesforce, S3, SFTP, Sockets
 # #########################################################################
 
-# --- 1. THE LOW-LEVEL SAFETY NET (TCP/NIO) ---
+# --- 1. CORE NETWORKING (TCP/NIO) ---
 
 RULE Universal TCP Connect
 CLASS java.net.AbstractPlainSocketImpl
@@ -14,7 +14,7 @@ BIND
     port:int = $2;
 IF (!host.contains("127.0.0.1") && !host.contains("0:0:0:0:0:0:0:1") && !host.equals("localhost"))
 DO 
-    traceln("[OUTBOUND-LEAK] PROTOCOL=TCP_RAW DEST=" + host + ":" + port + " THREAD=" + Thread.currentThread().getName());
+    traceln("[OUTBOUND-LEAK] PROTOCOL=TCP_RAW DEST=" + host + ":" + port);
 ENDRULE
 
 RULE Universal NIO Connect
@@ -22,31 +22,40 @@ CLASS sun.nio.ch.SocketChannelImpl
 METHOD connect(java.net.SocketAddress)
 AT ENTRY
 BIND addr:String = $1.toString();
-IF (!addr.contains("127.0.0.1") && !addr.contains("localhost") && !addr.contains("0:0:0:0:0:0:0:1") && !addr.contains("Users") && !addr.contains("AppData"))
+IF (!addr.contains("127.0.0.1") && !addr.contains("localhost") && !addr.contains("Users") && !addr.contains("AppData"))
 DO 
     traceln("[OUTBOUND-LEAK] PROTOCOL=NIO_TCP DEST=" + addr);
 ENDRULE
 
-# --- 2. MESSAGING (JMS) ---
+# --- 2. DEEP JMS CAPTURE (Mule 4 Internals) ---
 
-RULE Universal JMS Send
+RULE Mule JMS Commons Publish
+CLASS org.mule.jms.commons.internal.operation.JmsPublish
+METHOD publish(org.mule.jms.commons.internal.connection.JmsConnection, java.lang.String, javax.jms.Message, org.mule.extensions.jms.api.destination.DestinationType, org.mule.extensions.jms.api.message.JmsMessageOptions)
+AT ENTRY
+DO 
+    traceln("[OUTBOUND-LEAK] PROTOCOL=JMS_PUBLISH DEST=" + $2);
+ENDRULE
+
+RULE Universal JMS Interface
 INTERFACE javax.jms.MessageProducer
 METHOD send(javax.jms.Destination, javax.jms.Message)
 AT ENTRY
-BIND dest:String = $1.toString();
 DO 
-    traceln("[OUTBOUND-LEAK] PROTOCOL=JMS_SEND DEST=" + dest);
+    traceln("[OUTBOUND-LEAK] PROTOCOL=JMS_JAVA_SEND DEST=" + $1.toString());
 ENDRULE
 
-RULE Mule JMS Publish Operation
-CLASS org.mule.extensions.jms.internal.operation.PublishOperation
-METHOD publish(org.mule.extensions.jms.api.connection.JmsConnection, java.lang.String, org.mule.extensions.jms.api.message.JmsMessage, org.mule.extensions.jms.api.destination.JmsDestinationType, org.mule.extensions.jms.api.message.JmsMessageOptions)
+# --- 3. MULE SOCKETS CONNECTOR (Raw TCP/UDP) ---
+
+RULE Mule Sockets Connector Outbound
+CLASS org.mule.extension.sockets.internal.connection.TcpClientConnection
+METHOD send(byte[])
 AT ENTRY
 DO 
-    traceln("[OUTBOUND-LEAK] PROTOCOL=MULE_JMS_OP DEST=" + $2);
+    traceln("[OUTBOUND-LEAK] PROTOCOL=MULE_SOCKET_SEND STATUS=UNMOCKED");
 ENDRULE
 
-# --- 3. DATABASE (JDBC) ---
+# --- 4. DATABASE (JDBC) ---
 
 RULE Universal JDBC Driver
 INTERFACE java.sql.Driver
@@ -57,7 +66,7 @@ DO
     traceln("[OUTBOUND-LEAK] PROTOCOL=JDBC_DB URL=" + $1);
 ENDRULE
 
-# --- 4. WEB & CLOUD (HTTP / S3 / Salesforce) ---
+# --- 5. WEB & CLOUD (Mule HTTP / S3 / Salesforce) ---
 
 RULE Mule HTTP Interface
 INTERFACE org.mule.runtime.http.api.client.HttpClient
@@ -75,7 +84,7 @@ DO
     traceln("[OUTBOUND-LEAK] PROTOCOL=SALESFORCE DEST=" + $1.toString());
 ENDRULE
 
-# --- 5. ENTERPRISE (SAP / SFTP) ---
+# --- 6. ENTERPRISE CONNECTORS (SAP / SFTP) ---
 
 RULE SAP JCo Connection
 CLASS com.sap.conn.jco.rt.DefaultConnection
