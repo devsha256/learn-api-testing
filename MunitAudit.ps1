@@ -64,8 +64,10 @@ foreach ($ProjName in $Projects) {
         Write-Host '--- RUNNING MUNIT ---' -ForegroundColor Yellow
         `$env:JAVA_TOOL_OPTIONS='-Dlog4j.configurationFile="$Log4jConfig"'
         
-        # Run Maven and redirect logs
-        `$proc = Start-Process mvn -ArgumentList "clean","test","-Denv=dev","-Dhttp.port=$JobPort","-Dmunit.dynamic.port=$JobPort","-Dmaven.clean.failOnError=false","--no-transfer-progress" -NoNewWindow -PassThru -Wait -RedirectStandardOutput '$CurrentLog' -RedirectStandardError '$CurrentLog'
+        # FIXED: Using cmd /c with redirection to allow stdout and stderr to hit the same file
+        cmd /c "mvn clean test -Denv=dev -Dhttp.port=$JobPort -Dmunit.dynamic.port=$JobPort -Dmaven.clean.failOnError=false --no-transfer-progress > `"$CurrentLog`" 2>&1"
+        
+        Write-Host 'Maven Execution Finished.' -ForegroundColor Cyan
         
         # Mandatory delay for I/O flush
         Start-Sleep -Seconds 2
