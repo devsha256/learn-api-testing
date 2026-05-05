@@ -24,13 +24,12 @@ $LeakPatterns = @(
     @{ Connector = "SALESFORCE"; Pattern = "DEBUG.extension.salesforce." }
 )
 
-# --- CLEANUP ---
 Get-ChildItem $LogDir -Filter "*.done" | Remove-Item -Force -ErrorAction SilentlyContinue
 
 # =========================================================
-# 4. LAUNCH & TRACK BY PROCESS ID
+# 2. EXECUTION DASHBOARD (PID TRACKING)
 # =========================================================
-$LiveProcesses = @{} # Using a Hashtable to track PID -> ProjectName
+$LiveProcesses = @{} 
 $Counter = 0
 
 foreach ($ProjName in $Projects) {
@@ -40,71 +39,59 @@ foreach ($ProjName in $Projects) {
     $CurrentLog = Join-Path $LogDir "$($ProjName)_audit.log"
     $DoneMarker = Join-Path $LogDir "$($ProjName)_audit.done"
 
-    # THROTTLE: Wait until a window is closed manually or finishes
+    # THROTTLE
     while ($LiveProcesses.Count -ge $MaxThreads) {
         $FinishedIds = @()
         foreach ($id in $LiveProcesses.Keys) {
             if (!(Get-Process -Id $id -ErrorAction SilentlyContinue)) { $FinishedIds += $id }
         }
         foreach ($id in $FinishedIds) { $LiveProcesses.Remove($id) }
-        
-        if ($LiveProcesses.Count -ge $MaxThreads) { Start-Sleep -Seconds 3 }
+        Start-Sleep -Seconds 2
     }
 
     $ChildScript = @"
         `$Host.UI.RawUI.WindowTitle = 'AUDIT: $ProjName'
-        # Prevent PS from crashing on 'Picked up JAVA_TOOL_OPTIONS'
         `$ErrorActionPreference = 'SilentlyContinue'
-        
         Set-Location '$FullPath'
+        
         Write-Host '--- GIT SYNC ---' -ForegroundColor Gray
         git reset --hard; git checkout dev; git pull origin dev
         
         Write-Host '--- RUNNING MUNIT ---' -ForegroundColor Yellow
         `$env:JAVA_TOOL_OPTIONS='-Dlog4j.configurationFile="$Log4jConfig"'
         
-        # We execute through CMD to handle the 2>&1 redirection safely
-        & cmd /c "mvn clean test -Denv=dev -Dhttp.port=$JobPort -Dmunit.dynamic.port=$JobPort -Dmaven.clean.failOnError=false --no-transfer-progress > `"$CurrentLog`" 2>&1"
+        # LIVE OUTPUT + LOGGING
+        mvn clean test -Denv=dev -Dhttp.port=$JobPort -Dmunit.dynamic.port=$JobPort -Dmaven.clean.failOnError=false --no-transfer-progress 2>&1 | Tee-Object -FilePath '$CurrentLog'
         
-        if (`$LASTEXITCODE -ne 0) {
-            Write-Host "Maven finished with Exit Code: `$LASTEXITCODE" -ForegroundColor Red
-        } else {
-            Write-Host "Maven finished successfully." -ForegroundColor Green
-        }
-
         Set-Content '$DoneMarker' 'DONE'
         Write-Host '------------------------------------------------'
-        Write-Host 'WORK COMPLETE. Press ENTER to close window.' -ForegroundColor Cyan
+        Write-Host 'WORK COMPLETE. Press ENTER to signal completion.' -ForegroundColor Cyan
         Read-Host
 "@
+
     $p = Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $ChildScript -PassThru
     $LiveProcesses.Add($p.Id, $ProjName)
-    Write-Host "[>] Launched: $ProjName (PID: $($p.Id))" -ForegroundColor Green
+    Write-Host "[>] Launched: $ProjName" -ForegroundColor Green
 }
 
 # =========================================================
-# 5. THE FAIL-SAFE WAIT
+# 3. THE UNBREAKABLE WAIT
 # =========================================================
-Write-Host "`n[*] ALL PROJECTS QUEUED. Waiting for ALL windows to be closed..." -ForegroundColor Cyan
+Write-Host "`n[*] Waiting for all windows to be closed before generating CSV..." -ForegroundColor Cyan
 
 while ($LiveProcesses.Count -gt 0) {
     $FinishedIds = @()
     foreach ($id in $LiveProcesses.Keys) {
         if (!(Get-Process -Id $id -ErrorAction SilentlyContinue)) { $FinishedIds += $id }
     }
-    foreach ($id in $FinishedIds) { 
-        Write-Host "    [X] Process $($id) ($($LiveProcesses[$id])) closed." -ForegroundColor Gray
-        $LiveProcesses.Remove($id) 
-    }
-    if ($LiveProcesses.Count -gt 0) { Start-Sleep -Seconds 5 }
+    foreach ($id in $FinishedIds) { $LiveProcesses.Remove($id) }
+    Start-Sleep -Seconds 3
 }
 
-Write-Host "[*] All child processes exited. Finalizing CSV..." -ForegroundColor Green
-Start-Sleep -Seconds 2 # Safety buffer for file system sync
-
 # =========================================================
-# 6. PARSE LOGS
+# 4. CSV GENERATION (GUARANTEED DATA)
 # =========================================================
+Write-Host "[*] All processes finished. Parsing logs..." -ForegroundColor Green
 $FinalReport = New-Object System.Collections.Generic.List[PSObject]
 
 foreach ($ProjName in $Projects) {
@@ -127,11 +114,11 @@ foreach ($ProjName in $Projects) {
             }
         }
         if (!$leaksFound) {
-            $status = if ($LogLines -match "BUILD SUCCESS") { "CLEAN" } else { "BUILD_FAILED_OR_INCOMPLETE" }
-            $FinalReport.Add([PSCustomObject]@{ Application = $ProjName; Status = $status; Details = "Checked" })
+            $status = if ($LogLines -match "BUILD SUCCESS") { "CLEAN" } else { "INCOMPLETE" }
+            $FinalReport.Add([PSCustomObject]@{ Application = $ProjName; Status = $status; Details = "No leaks found" })
         }
     }
 }
 
 $FinalReport | Export-Csv -Path $CSVReportPath -NoTypeInformation -Encoding UTF8
-Write-Host "Summary generated at: $CSVReportPath" -ForegroundColor Green
+Write-Host "`nAUDIT COMPLETE. Report: $CSVReportPath" -ForegroundColor Green
