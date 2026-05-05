@@ -53,17 +53,30 @@ foreach ($ProjName in $Projects) {
 
     $ChildScript = @"
         `$Host.UI.RawUI.WindowTitle = 'AUDIT: $ProjName'
+        # Prevent PS from crashing on 'Picked up JAVA_TOOL_OPTIONS'
+        `$ErrorActionPreference = 'SilentlyContinue'
+        
         Set-Location '$FullPath'
         Write-Host '--- GIT SYNC ---' -ForegroundColor Gray
         git reset --hard; git checkout dev; git pull origin dev
+        
         Write-Host '--- RUNNING MUNIT ---' -ForegroundColor Yellow
         `$env:JAVA_TOOL_OPTIONS='-Dlog4j.configurationFile="$Log4jConfig"'
-        cmd /c "mvn clean test -Denv=dev -Dhttp.port=$JobPort -Dmunit.dynamic.port=$JobPort -Dmaven.clean.failOnError=false --no-transfer-progress > `"$CurrentLog`" 2>&1"
-        Set-Content '$DoneMarker' 'DONE'
-        Write-Host 'Audit Finished. Window will stay open for inspection.' -ForegroundColor Cyan
-        Read-Host 'Press ENTER to signal completion to master script...'
-"@
+        
+        # We execute through CMD to handle the 2>&1 redirection safely
+        & cmd /c "mvn clean test -Denv=dev -Dhttp.port=$JobPort -Dmunit.dynamic.port=$JobPort -Dmaven.clean.failOnError=false --no-transfer-progress > `"$CurrentLog`" 2>&1"
+        
+        if (`$LASTEXITCODE -ne 0) {
+            Write-Host "Maven finished with Exit Code: `$LASTEXITCODE" -ForegroundColor Red
+        } else {
+            Write-Host "Maven finished successfully." -ForegroundColor Green
+        }
 
+        Set-Content '$DoneMarker' 'DONE'
+        Write-Host '------------------------------------------------'
+        Write-Host 'WORK COMPLETE. Press ENTER to close window.' -ForegroundColor Cyan
+        Read-Host
+"@
     $p = Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $ChildScript -PassThru
     $LiveProcesses.Add($p.Id, $ProjName)
     Write-Host "[>] Launched: $ProjName (PID: $($p.Id))" -ForegroundColor Green
