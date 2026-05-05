@@ -2,60 +2,67 @@
 <Configuration status="WARN">
     <Appenders>
         <Console name="Console" target="SYSTEM_OUT">
+            <!-- Ensure immediateFlush is handled by the console appender -->
             <PatternLayout pattern="%-5p %d [%t] [%c] - %m%n"/>
         </Console>
     </Appenders>
 
     <Loggers>
-
-        <!-- Keep default Mule runtime noise at WARN -->
         <AsyncRoot level="WARN">
             <AppenderRef ref="Console"/>
         </AsyncRoot>
 
         <!-- ============================================================ -->
-        <!-- LEAK DETECTION LOGGERS                                        -->
-        <!-- If any of these print at DEBUG during MUnit, the mock failed  -->
+        <!-- FIXED LEAK DETECTION LOGGERS                                 -->
         <!-- ============================================================ -->
 
-        <!-- HTTP: logs the final resolved URI for every real outbound call -->
-        <AsyncLogger name="org.mule.extension.http.internal.request.HttpRequestOperations"
-                     level="DEBUG" additivity="false">
+        <!-- HTTP: Targets both the extension and the actual service client -->
+        <AsyncLogger name="org.mule.service.http.impl.service.client" level="DEBUG" additivity="false">
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+        <AsyncLogger name="org.mule.extension.http.internal.request" level="DEBUG" additivity="false">
             <AppenderRef ref="Console"/>
         </AsyncLogger>
 
-        <!-- JMS: logs destination and message details on real publish/consume -->
-        <AsyncLogger name="org.mule.extensions.jms.internal.operation.JmsPublish"
-                     level="DEBUG" additivity="false">
+        <!-- JMS: FIXED - Moved to jms.commons where Mule 4 actually executes -->
+        <AsyncLogger name="org.mule.jms.commons.internal.operation" level="DEBUG" additivity="false">
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+        <AsyncLogger name="org.mule.extensions.jms" level="DEBUG" additivity="false">
             <AppenderRef ref="Console"/>
         </AsyncLogger>
 
-        <AsyncLogger name="org.mule.extensions.jms.internal.operation.JmsConsume"
-                     level="DEBUG" additivity="false">
+        <!-- DB: Standard database extension logging -->
+        <AsyncLogger name="org.mule.extension.db" level="DEBUG" additivity="false">
             <AppenderRef ref="Console"/>
         </AsyncLogger>
 
-        <!-- DB: logs SQL statements on every real execution -->
-        <AsyncLogger name="org.mule.extension.db"
-                     level="DEBUG" additivity="false">
+        <!-- SFTP/FTP: Covers both file-based connectors -->
+        <AsyncLogger name="org.mule.extension.sftp" level="DEBUG" additivity="false">
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+        <AsyncLogger name="org.mule.extension.file" level="DEBUG" additivity="false">
             <AppenderRef ref="Console"/>
         </AsyncLogger>
 
-        <!-- SFTP: logs file path and operation on every real transfer -->
-        <AsyncLogger name="org.mule.extension.sftp"
-                     level="DEBUG" additivity="false">
+        <!-- SALESFORCE: SDK and Transport level -->
+        <AsyncLogger name="org.mule.extension.salesforce" level="DEBUG" additivity="false">
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+        <AsyncLogger name="com.sforce.ws.transport" level="DEBUG" additivity="false">
             <AppenderRef ref="Console"/>
         </AsyncLogger>
 
-        <!-- VM Connector -->
-        <AsyncLogger name="org.mule.extensions.vm"
-                     level="DEBUG" additivity="false">
+        <!-- SOCKETS: Raw TCP/UDP connections -->
+        <AsyncLogger name="org.mule.extension.sockets" level="DEBUG" additivity="false">
             <AppenderRef ref="Console"/>
         </AsyncLogger>
 
-        <!-- Object Store -->
-        <AsyncLogger name="org.mule.extension.objectstore"
-                     level="DEBUG" additivity="false">
+        <!-- VM & OBJECT STORE -->
+        <AsyncLogger name="org.mule.extensions.vm" level="DEBUG" additivity="false">
+            <AppenderRef ref="Console"/>
+        </AsyncLogger>
+        <AsyncLogger name="org.mule.extension.objectstore" level="DEBUG" additivity="false">
             <AppenderRef ref="Console"/>
         </AsyncLogger>
 
