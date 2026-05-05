@@ -15,7 +15,6 @@ $BasePort      = 9000
 if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
 if (!(Test-Path $Log4jConfig)) { Write-Error "Config not found"; exit 1 }
 
-# FIXED: Corrected the $_ variable syntax
 [string[]]$Projects = Get-Content $ProjectList | 
     Where-Object { ![string]::IsNullOrWhiteSpace($_) } | 
     ForEach-Object { $_.Trim() }
@@ -56,51 +55,57 @@ foreach ($ProjName in $Projects) {
     $ChildScript = @"
         `$Host.UI.RawUI.WindowTitle = 'AUDIT: $ProjName'
         Set-Location '$FullPath'
+        
+        Write-Host '--- GIT SYNC ---' -ForegroundColor Gray
+        git reset --hard
+        git checkout dev
+        git pull origin dev
+        
+        Write-Host '--- RUNNING MUNIT ---' -ForegroundColor Yellow
         `$env:JAVA_TOOL_OPTIONS='-Dlog4j.configurationFile="$Log4jConfig"'
         
-        # We redirect within the Start-Process to ensure file handles are managed by the child
-        `$proc = Start-Process mvn -ArgumentList "clean","test","-Denv=dev","-Dhttp.port=$JobPort","-Dmunit.dynamic.port=$JobPort","-Dmaven.clean.failOnError=false" -NoNewWindow -PassThru -Wait -RedirectStandardOutput '$CurrentLog' -RedirectStandardError '$CurrentLog'
+        # Run Maven and redirect logs
+        `$proc = Start-Process mvn -ArgumentList "clean","test","-Denv=dev","-Dhttp.port=$JobPort","-Dmunit.dynamic.port=$JobPort","-Dmaven.clean.failOnError=false","--no-transfer-progress" -NoNewWindow -PassThru -Wait -RedirectStandardOutput '$CurrentLog' -RedirectStandardError '$CurrentLog'
         
-        # Small delay to allow log buffers to flush
+        # Mandatory delay for I/O flush
         Start-Sleep -Seconds 2
         Set-Content '$DoneMarker' 'DONE'
-        Write-Host 'Audit Finished. Press Enter.' -ForegroundColor Green
+        
+        Write-Host '----------------------------------------'
+        Write-Host 'Audit Finished. Press ENTER to close.' -ForegroundColor Green
         Read-Host
 "@
 
     $p = Start-Process powershell.exe -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $ChildScript -PassThru
-    $RunningProjects.Add([PSCustomObject]@{ Name = $ProjName; DoneMarker = $DoneMarker; LogFile = $CurrentLog; ProcessId = $p.Id })
+    $RunningProjects.Add([PSCustomObject]@{ Name = $ProjName; DoneMarker = $DoneMarker; LogFile = $CurrentLog })
     
     Write-Host "[>] Started: $ProjName" -ForegroundColor Green
 }
 
 # =========================================================
-# 5. WAIT (STRENGTHENED)
+# 5. WAIT FOR COMPLETION
 # =========================================================
-Write-Host "`n[*] Waiting for all Maven jobs to finalize logs..." -ForegroundColor Cyan
+Write-Host "`n[*] Waiting for all projects to finish..." -ForegroundColor Cyan
 while (($RunningProjects | Where-Object { !(Test-Path $_.DoneMarker) }).Count -gt 0) {
-    $active = ($RunningProjects | Where-Object { !(Test-Path $_.DoneMarker) }).Count
-    Write-Host "    Pending: $active / $($RunningProjects.Count)" -ForegroundColor Gray
     Start-Sleep -Seconds 5
 }
 
-# CRITICAL: Wait 5 seconds after all markers appear to ensure Windows releases file locks
-Write-Host "[*] All markers detected. Cooling down for I/O flush..." -ForegroundColor Yellow
+# Final cooling period to ensure file locks are released
+Write-Host "[*] Finalizing logs..." -ForegroundColor Yellow
 Start-Sleep -Seconds 5
 
 # =========================================================
-# 6. PARSE LOGS
+# 6. PARSE LOGS & GENERATE REPORT
 # =========================================================
 $FinalReport = New-Object System.Collections.Generic.List[PSObject]
 
 foreach ($item in $RunningProjects) {
     if (!(Test-Path $item.LogFile)) {
-        $FinalReport.Add([PSCustomObject]@{ Application = $item.Name; Status = "NO_LOG"; Details = "File not found" })
+        $FinalReport.Add([PSCustomObject]@{ Application = $item.Name; Status = "NO_LOG"; Connector = ""; Details = "Log missing" })
         continue
     }
 
-    # Reading with -Raw or -Wait can help if files are large
-    $LogLines = Get-Content $item.LogFile -ErrorAction SilentlyContinue
+    $LogLines = Get-Content $item.LogFile
     $leaksFound = $false
 
     foreach ($p in $LeakPatterns) {
@@ -120,9 +125,9 @@ foreach ($item in $RunningProjects) {
 
     if (!$leaksFound) {
         $status = if ($LogLines -match "BUILD SUCCESS|BUILD FAILURE") { "CLEAN" } else { "INCOMPLETE" }
-        $FinalReport.Add([PSCustomObject]@{ Application = $item.Name; Status = $status; Details = "No patterns detected" })
+        $FinalReport.Add([PSCustomObject]@{ Application = $item.Name; Status = $status; Connector = ""; Details = "No leaks" })
     }
 }
 
 $FinalReport | Export-Csv -Path $CSVReportPath -NoTypeInformation -Encoding UTF8
-Write-Host "Summary generated at: $CSVReportPath" -ForegroundColor Green
+Write-Host "Summary generated: $CSVReportPath" -ForegroundColor Green
