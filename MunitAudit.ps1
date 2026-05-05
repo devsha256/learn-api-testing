@@ -6,6 +6,8 @@ $ProjectList   = "C:/path/to/projects.csv"
 $LogDir        = "$PSScriptRoot/audit_logs"
 $CSVReportPath = "$PSScriptRoot/Audit_Summary.csv"
 $Log4jConfig   = "$RootFolder/log4j2-munit-audit.xml"
+$BytemanJar    = "C:/tools/byteman/lib/byteman.jar"
+$BytemanScript = "C:/audit/leak_detector.btm"
 $MaxThreads    = 4
 $BasePort      = 9000
 
@@ -15,13 +17,9 @@ $BasePort      = 9000
 if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
 [string[]]$Projects = Get-Content $ProjectList | Where-Object { ![string]::IsNullOrWhiteSpace($_) } | ForEach-Object { $_.Trim() }
 
+# FIXED: Now we look for the Byteman tag for 100% accuracy
 $LeakPatterns = @(
-    @{ Connector = "HTTP"; Pattern = "DEBUG.HttpRequestOperations." },
-    @{ Connector = "JMS-PUBLISH"; Pattern = "DEBUG.JmsPublish." },
-    @{ Connector = "JMS-CONSUME"; Pattern = "DEBUG.JmsConsume." },
-    @{ Connector = "DATABASE"; Pattern = "DEBUG.extension.db." },
-    @{ Connector = "SFTP"; Pattern = "DEBUG.extension.sftp." },
-    @{ Connector = "SALESFORCE"; Pattern = "DEBUG.extension.salesforce." }
+    @{ Connector = "BYTEMAN-DETECTOR"; Pattern = "\[OUTBOUND-LEAK\]" }
 )
 
 Get-ChildItem $LogDir -Filter "*.done" | Remove-Item -Force -ErrorAction SilentlyContinue
@@ -39,7 +37,6 @@ foreach ($ProjName in $Projects) {
     $CurrentLog = Join-Path $LogDir "$($ProjName)_audit.log"
     $DoneMarker = Join-Path $LogDir "$($ProjName)_audit.done"
 
-    # THROTTLE
     while ($LiveProcesses.Count -ge $MaxThreads) {
         $FinishedIds = @()
         foreach ($id in $LiveProcesses.Keys) {
@@ -58,9 +55,10 @@ foreach ($ProjName in $Projects) {
         git reset --hard; git checkout dev; git pull origin dev
         
         Write-Host '--- RUNNING MUNIT ---' -ForegroundColor Yellow
-        `$env:JAVA_TOOL_OPTIONS='-Dlog4j.configurationFile="$Log4jConfig"'
         
-        # LIVE OUTPUT + LOGGING
+        # INJECTING BYTEMAN + LOG4J2
+        `$env:JAVA_TOOL_OPTIONS="-javaagent:'$BytemanJar'=script:'$BytemanScript' -Xbootclasspath/a:'$BytemanJar' -Dlog4j.configurationFile='$Log4jConfig'"
+        
         mvn clean test -Denv=dev -Dhttp.port=$JobPort -Dmunit.dynamic.port=$JobPort -Dmaven.clean.failOnError=false --no-transfer-progress 2>&1 | Tee-Object -FilePath '$CurrentLog'
         
         Set-Content '$DoneMarker' 'DONE'
@@ -77,8 +75,7 @@ foreach ($ProjName in $Projects) {
 # =========================================================
 # 3. THE UNBREAKABLE WAIT
 # =========================================================
-Write-Host "`n[*] Waiting for all windows to be closed before generating CSV..." -ForegroundColor Cyan
-
+Write-Host "`n[*] Waiting for windows to be closed..." -ForegroundColor Cyan
 while ($LiveProcesses.Count -gt 0) {
     $FinishedIds = @()
     foreach ($id in $LiveProcesses.Keys) {
@@ -89,7 +86,7 @@ while ($LiveProcesses.Count -gt 0) {
 }
 
 # =========================================================
-# 4. CSV GENERATION (GUARANTEED DATA)
+# 4. CSV GENERATION
 # =========================================================
 Write-Host "[*] All processes finished. Parsing logs..." -ForegroundColor Green
 $FinalReport = New-Object System.Collections.Generic.List[PSObject]
@@ -107,7 +104,7 @@ foreach ($ProjName in $Projects) {
                     $FinalReport.Add([PSCustomObject]@{
                         Application = $ProjName
                         Status      = "LEAK_DETECTED"
-                        Connector   = $p.Connector
+                        Connector   = $h.Line.Split(" ")[1] # Captures PROTOCOL=...
                         Details     = $h.Line.Trim()
                     })
                 }
