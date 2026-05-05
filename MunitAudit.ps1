@@ -1,6 +1,9 @@
 # =========================================================
+
 # CONFIGURATION - UPDATE THESE PATHS
+
 # =========================================================
+
 $RootFolder    = "C:/Users/Saddam/Projects"
 $ProjectList   = "C:/path/to/projects.csv"
 $LogDir        = "$PSScriptRoot/audit_logs"
@@ -8,246 +11,398 @@ $CSVReportPath = "$PSScriptRoot/Audit_Summary.csv"
 $Log4jConfig   = "$RootFolder/log4j2-munit-audit.xml"
 $MaxThreads    = 4
 $BasePort      = 9000
+
 # =========================================================
 
 # =========================================================
+
 # 1. PRE-FLIGHT
+
 # =========================================================
-if (!(Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir | Out-Null }
+
+if (!(Test-Path $LogDir)) {
+New-Item -ItemType Directory -Path $LogDir | Out-Null
+}
 
 if (!(Test-Path $Log4jConfig)) {
-    Write-Error "log4j2 audit config not found at: $Log4jConfig. Please place log4j2-munit-audit.xml in $RootFolder before running."
-    exit 1
+Write-Error "log4j2 audit config not found at: $Log4jConfig"
+exit 1
 }
+
 Write-Host "[*] Using log4j2 audit config: $Log4jConfig" -ForegroundColor Cyan
 
 [string[]]$Projects = Get-Content $ProjectList |
-    Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
-    ForEach-Object { $_.Trim() }
+Where-Object { -not [string]::IsNullOrWhiteSpace($*) } |
+ForEach-Object { $*.Trim() }
 
-if ($Projects.Count -eq 0) { Write-Error "No projects found in $ProjectList"; exit 1 }
+if ($Projects.Count -eq 0) {
+Write-Error "No projects found in $ProjectList"
+exit 1
+}
 
 # =========================================================
+
 # 2. LEAK DETECTION PATTERNS
+
 # =========================================================
+
 $LeakPatterns = @(
-    [PSCustomObject]@{ Connector = "HTTP"         ; Pattern = "DEBUG.*HttpRequestOperations.*"  },
-    [PSCustomObject]@{ Connector = "JMS-PUBLISH"  ; Pattern = "DEBUG.*JmsPublish.*"             },
-    [PSCustomObject]@{ Connector = "JMS-CONSUME"  ; Pattern = "DEBUG.*JmsConsume.*"             },
-    [PSCustomObject]@{ Connector = "DATABASE"     ; Pattern = "DEBUG.*extension\.db.*"          },
-    [PSCustomObject]@{ Connector = "SFTP"         ; Pattern = "DEBUG.*extension\.sftp.*"        },
-    [PSCustomObject]@{ Connector = "VM"           ; Pattern = "DEBUG.*extensions\.vm.*"         },
-    [PSCustomObject]@{ Connector = "OBJECT-STORE" ; Pattern = "DEBUG.*extension\.objectstore.*" },
-    [PSCustomObject]@{ Connector = "SALESFORCE"   ; Pattern = "DEBUG.*extension\.salesforce.*"  }
+[PSCustomObject]@{ Connector = "HTTP"         ; Pattern = "DEBUG.*HttpRequestOperations.*"  },
+[PSCustomObject]@{ Connector = "JMS-PUBLISH"  ; Pattern = "DEBUG.*JmsPublish.*"             },
+[PSCustomObject]@{ Connector = "JMS-CONSUME"  ; Pattern = "DEBUG.*JmsConsume.*"             },
+[PSCustomObject]@{ Connector = "DATABASE"     ; Pattern = "DEBUG.*extension.db.*"          },
+[PSCustomObject]@{ Connector = "SFTP"         ; Pattern = "DEBUG.*extension.sftp.*"        },
+[PSCustomObject]@{ Connector = "VM"           ; Pattern = "DEBUG.*extensions.vm.*"         },
+[PSCustomObject]@{ Connector = "OBJECT-STORE" ; Pattern = "DEBUG.*extension.objectstore.*" },
+[PSCustomObject]@{ Connector = "SALESFORCE"   ; Pattern = "DEBUG.*extension.salesforce.*"  }
 )
 
 # =========================================================
-# 3. LAUNCH ONE POWERSHELL WINDOW PER PROJECT
-#    Each window:
-#      - shows full live Maven output
-#      - tees output to its own log file
-#      - prompts "Press ENTER to close" when done
-#    Parent throttles to $MaxThreads active windows.
-# =========================================================
-Write-Host "`n[*] Launching audit windows for $($Projects.Count) projects (MaxThreads=$MaxThreads)..." -ForegroundColor Cyan
-$StartTime   = Get-Date
 
-# Tracks [PSCustomObject]@{ Name; Process } for all launched windows
-$RunningProcs = [System.Collections.Generic.List[PSCustomObject]]::new()
-$Counter      = 0
+# 3. CLEAN OLD STATE
+
+# =========================================================
+
+Get-ChildItem $LogDir -Filter "*.done" -ErrorAction SilentlyContinue |
+Remove-Item -Force -ErrorAction SilentlyContinue
+
+# =========================================================
+
+# 4. LAUNCH PROJECT WINDOWS
+
+# =========================================================
+
+Write-Host "`n[*] Launching audit windows..." -ForegroundColor Cyan
+
+$StartTime = Get-Date
+$RunningProjects = [System.Collections.Generic.List[PSCustomObject]]::new()
+$Counter = 0
 
 foreach ($ProjName in $Projects) {
-    $JobPort    = $BasePort + $Counter
-    $FullPath   = Join-Path $RootFolder $ProjName
-    $CurrentLog = Join-Path $LogDir "$($ProjName)_audit.log"
-    $Counter++
 
-    if (!(Test-Path $FullPath)) {
-        Write-Host "  [!] SKIP: $ProjName - path not found ($FullPath)" -ForegroundColor Red
-        continue
+```
+$JobPort     = $BasePort + $Counter
+$Counter++
+
+$FullPath    = Join-Path $RootFolder $ProjName
+$CurrentLog  = Join-Path $LogDir "$($ProjName)_audit.log"
+$DoneMarker  = Join-Path $LogDir "$($ProjName)_audit.done"
+
+if (!(Test-Path $FullPath)) {
+    Write-Host "  [!] SKIP: $ProjName path not found" -ForegroundColor Red
+    continue
+}
+
+# =====================================================
+# THROTTLE
+# =====================================================
+do {
+
+    $active = $RunningProjects | Where-Object {
+        -not (Test-Path $_.DoneMarker)
     }
 
-    # ── Throttle: wait until a slot is free ──────────────────────────────
-    do {
-        $activeProcs = $RunningProcs | Where-Object {
-            -not $_.Process.HasExited
-        }
-        if ($activeProcs.Count -ge $MaxThreads) {
-            $active    = $activeProcs.Count
-            $completed = $RunningProcs.Count - $active
-            Write-Host "    [~] Slots full ($active running / $completed done). Waiting..." -ForegroundColor DarkCyan
-            Start-Sleep -Seconds 3
-        }
-    } while ($activeProcs.Count -ge $MaxThreads)
+    if ($active.Count -ge $MaxThreads) {
+        Write-Host "    [~] MaxThreads reached ($($active.Count)). Waiting..." -ForegroundColor DarkCyan
+        Start-Sleep -Seconds 5
+    }
 
-    # ── Build the child script that runs inside the new window ────────────
-    $ChildScript = @"
+} while ($active.Count -ge $MaxThreads)
+
+# =====================================================
+# CHILD SCRIPT
+# =====================================================
+$ChildScript = @"
+```
+
 `$Host.UI.RawUI.WindowTitle = 'AUDIT: $ProjName'
 
+Write-Host ''
 Write-Host '========================================' -ForegroundColor Cyan
-Write-Host '  PROJECT : $ProjName' -ForegroundColor Cyan
-Write-Host '  PORT    : $JobPort'  -ForegroundColor Cyan
-Write-Host '  LOG     : $CurrentLog' -ForegroundColor Cyan
+Write-Host 'PROJECT : $ProjName' -ForegroundColor Cyan
+Write-Host 'PORT    : $JobPort' -ForegroundColor Cyan
+Write-Host 'LOG     : $CurrentLog' -ForegroundColor Cyan
 Write-Host '========================================' -ForegroundColor Cyan
+Write-Host ''
 
-# ── GIT SYNC ──────────────────────────────────────────
-Write-Host '--- SYNCING GIT ---' -ForegroundColor Gray
 Set-Location '$FullPath'
+
+Write-Host '--- GIT SYNC ---' -ForegroundColor Gray
+
 git reset --hard
 git checkout dev
 git pull origin dev
 
-# ── SET LOG4J OVERRIDE ────────────────────────────────
-# Points the JVM at the shared external log4j2 audit config.
-# No Byteman. No agent. No classloader issues.
-`$env:JAVA_TOOL_OPTIONS = '-Dlog4j.configurationFile="$Log4jConfig"'
-
-# ── RUN MUNIT ─────────────────────────────────────────
+Write-Host ''
 Write-Host '--- RUNNING MUNIT ---' -ForegroundColor Yellow
-mvn clean test ``
-    "-Denv=dev" ``
-    "-Dhttp.port=$JobPort" ``
-    "-Dmunit.dynamic.port=$JobPort" ``
-    "-Dmaven.clean.failOnError=false" ``
-    "--no-transfer-progress" | Tee-Object -FilePath '$CurrentLog'
+Write-Host ''
 
-`$env:JAVA_TOOL_OPTIONS = ''
+`$env:JAVA_TOOL_OPTIONS='-Dlog4j.configurationFile="$Log4jConfig"'
+
+try {
+
+```
+# ============================================
+# IMPORTANT:
+# Use Start-Process + -Wait
+# instead of pipeline + Tee-Object
+# ============================================
+
+`$mvnArgs = @(
+    'clean',
+    'test',
+    '-Denv=dev',
+    '-Dhttp.port=$JobPort',
+    '-Dmunit.dynamic.port=$JobPort',
+    '-Dmaven.clean.failOnError=false',
+    '--no-transfer-progress'
+)
+
+`$mvn = Start-Process `
+    -FilePath 'mvn' `
+    -ArgumentList `$mvnArgs `
+    -WorkingDirectory '$FullPath' `
+    -NoNewWindow `
+    -RedirectStandardOutput '$CurrentLog' `
+    -RedirectStandardError '$CurrentLog' `
+    -PassThru `
+    -Wait
 
 Write-Host ''
-Write-Host '========================================' -ForegroundColor Cyan
-Write-Host "  DONE: $ProjName" -ForegroundColor Cyan
-Write-Host '========================================' -ForegroundColor Cyan
+Write-Host 'Maven Exit Code:' `$mvn.ExitCode -ForegroundColor Cyan
+```
+
+}
+catch {
+Write-Host ''
+Write-Host 'ERROR RUNNING MAVEN:' -ForegroundColor Red
+Write-Host `$_
+}
+finally {
+
+```
+`$env:JAVA_TOOL_OPTIONS=''
+
+# ============================================
+# IMPORTANT:
+# Write completion marker ONLY after
+# Maven + stdout flush complete
+# ============================================
+
+Set-Content '$DoneMarker' 'DONE'
+
+Write-Host ''
+Write-Host '========================================' -ForegroundColor Green
+Write-Host 'DONE: $ProjName' -ForegroundColor Green
+Write-Host '========================================' -ForegroundColor Green
+Write-Host ''
+
 Read-Host 'Press ENTER to close this window'
+```
+
+}
 "@
 
-    $proc = Start-Process powershell.exe `
-        -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $ChildScript `
-        -PassThru
+```
+Start-Process powershell.exe `
+    -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $ChildScript `
+    | Out-Null
 
-    $RunningProcs.Add([PSCustomObject]@{
-        Name    = $ProjName
-        Process = $proc
-    })
+$RunningProjects.Add([PSCustomObject]@{
+    Name       = $ProjName
+    DoneMarker = $DoneMarker
+    LogFile    = $CurrentLog
+})
 
-    Write-Host "  [>] Launched window: $ProjName (PID $($proc.Id), port $JobPort)" -ForegroundColor Green
+Write-Host "  [>] Started: $ProjName" -ForegroundColor Green
+```
+
 }
 
 # =========================================================
-# 4. LIVE PROGRESS MONITOR
-#    Continuously prints running / completed counts until
-#    every window process has exited.
+
+# 5. WAIT FOR ALL PROJECTS
+
 # =========================================================
-Write-Host "`n[*] All windows launched. Monitoring progress..." -ForegroundColor Cyan
-Write-Host "    (Each window will prompt 'Press ENTER' when its Maven run finishes)`n" -ForegroundColor DarkCyan
+
+Write-Host "`n[*] Waiting for all Maven executions to finish..." -ForegroundColor Cyan
 
 do {
-    Start-Sleep -Seconds 5
 
-    $stillRunning = $RunningProcs | Where-Object { -not $_.Process.HasExited }
-    $done         = $RunningProcs | Where-Object {       $_.Process.HasExited }
+```
+Start-Sleep -Seconds 5
 
-    Write-Host "    Running: $($stillRunning.Count) | Completed: $($done.Count) | Total: $($RunningProcs.Count)" -ForegroundColor DarkCyan
+$running = $RunningProjects | Where-Object {
+    -not (Test-Path $_.DoneMarker)
+}
 
-    if ($stillRunning.Count -gt 0) {
-        $names = ($stillRunning | Select-Object -ExpandProperty Name) -join ", "
-        Write-Host "    Still running: $names" -ForegroundColor DarkGray
-    }
+$done = $RunningProjects | Where-Object {
+    (Test-Path $_.DoneMarker)
+}
 
-} while ($stillRunning.Count -gt 0)
+Write-Host "    Running: $($running.Count) | Completed: $($done.Count) | Total: $($RunningProjects.Count)" -ForegroundColor DarkCyan
+
+if ($running.Count -gt 0) {
+    $names = ($running | Select-Object -ExpandProperty Name) -join ", "
+    Write-Host "    Still running: $names" -ForegroundColor DarkGray
+}
+```
+
+} while ($running.Count -gt 0)
 
 $Duration = (Get-Date) - $StartTime
-Write-Host "`n[*] All windows have completed in $([math]::Round($Duration.TotalSeconds, 1))s" -ForegroundColor Cyan
+
+Write-Host ''
+Write-Host '[*] ALL PROJECTS FINISHED' -ForegroundColor Green
+Write-Host ''
 
 # =========================================================
-# 5. PARSE LOGS AND BUILD REPORT
+
+# 6. PARSE LOGS
+
 # =========================================================
-Write-Host "[*] Parsing logs for leak signals..." -ForegroundColor Cyan
+
+Write-Host "[*] Parsing logs..." -ForegroundColor Cyan
 
 $FinalReport = [System.Collections.Generic.List[PSCustomObject]]::new()
 
 foreach ($ProjName in $Projects) {
-    $LogFile = Join-Path $LogDir "$($ProjName)_audit.log"
 
-    if (!(Test-Path $LogFile)) {
-        $FinalReport.Add([PSCustomObject]@{
-            Application     = $ProjName
-            Status          = "NO_LOG"
-            Connector       = ""
-            LeakCount       = 0
-            FirstOccurrence = ""
-            Details         = "Log file not produced - project may have been skipped"
-        })
-        continue
-    }
+```
+$LogFile = Join-Path $LogDir "$($ProjName)_audit.log"
 
-    $LogLines   = Get-Content $LogFile
-    $foundLeaks = [System.Collections.Generic.List[PSCustomObject]]::new()
+if (!(Test-Path $LogFile)) {
 
-    foreach ($pattern in $LeakPatterns) {
-        $hits = $LogLines | Select-String -Pattern $pattern.Pattern
-        if ($hits) {
-            foreach ($hit in $hits) {
-                $foundLeaks.Add([PSCustomObject]@{
-                    Application     = $ProjName
-                    Status          = "LEAK_DETECTED"
-                    Connector       = $pattern.Connector
-                    LeakCount       = $hits.Count
-                    FirstOccurrence = $hit.LineNumber
-                    Details         = $hit.Line.Trim()
-                })
-            }
+    $FinalReport.Add([PSCustomObject]@{
+        Application     = $ProjName
+        Status          = "NO_LOG"
+        Connector       = ""
+        LeakCount       = 0
+        FirstOccurrence = ""
+        Details         = "Log file missing"
+    })
+
+    continue
+}
+
+$LogLines = Get-Content $LogFile
+
+$foundLeaks = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+foreach ($pattern in $LeakPatterns) {
+
+    $hits = $LogLines | Select-String -Pattern $pattern.Pattern
+
+    if ($hits) {
+
+        foreach ($hit in $hits) {
+
+            $foundLeaks.Add([PSCustomObject]@{
+                Application     = $ProjName
+                Status          = "LEAK_DETECTED"
+                Connector       = $pattern.Connector
+                LeakCount       = $hits.Count
+                FirstOccurrence = $hit.LineNumber
+                Details         = $hit.Line.Trim()
+            })
         }
     }
+}
 
-    if ($foundLeaks.Count -gt 0) {
-        $FinalReport.AddRange($foundLeaks)
-    } else {
-        $testRan = $LogLines | Select-String -Pattern "BUILD SUCCESS|BUILD FAILURE|Tests run:"
-        $status  = if ($testRan) { "CLEAN" } else { "NO_TESTS_RAN" }
-        $FinalReport.Add([PSCustomObject]@{
-            Application     = $ProjName
-            Status          = $status
-            Connector       = ""
-            LeakCount       = 0
-            FirstOccurrence = ""
-            Details         = if ($status -eq "CLEAN") {
-                                  "No connector DEBUG logs detected - all mocks applied correctly"
-                              } else {
-                                  "Maven output did not confirm test execution - check log"
-                              }
-        })
+if ($foundLeaks.Count -gt 0) {
+
+    $FinalReport.AddRange($foundLeaks)
+
+}
+else {
+
+    $testRan = $LogLines | Select-String -Pattern "BUILD SUCCESS|BUILD FAILURE|Tests run:"
+
+    $status = if ($testRan) {
+        "CLEAN"
     }
+    else {
+        "NO_TESTS_RAN"
+    }
+
+    $FinalReport.Add([PSCustomObject]@{
+        Application     = $ProjName
+        Status          = $status
+        Connector       = ""
+        LeakCount       = 0
+        FirstOccurrence = ""
+        Details         = if ($status -eq "CLEAN") {
+            "No leak patterns detected"
+        } else {
+            "Maven execution not confirmed"
+        }
+    })
+}
+```
+
 }
 
 # =========================================================
-# 6. EXPORT CSV + PRINT CONSOLE SUMMARY
+
+# 7. EXPORT REPORT
+
 # =========================================================
-$FinalReport | Export-Csv -Path $CSVReportPath -NoTypeInformation -Encoding UTF8
 
-$leakProjects  = $FinalReport | Where-Object { $_.Status -eq "LEAK_DETECTED"          } | Select-Object -ExpandProperty Application -Unique
-$cleanProjects = $FinalReport | Where-Object { $_.Status -eq "CLEAN"                  } | Select-Object -ExpandProperty Application -Unique
-$noLog         = $FinalReport | Where-Object { $_.Status -in "NO_LOG","NO_TESTS_RAN"  } | Select-Object -ExpandProperty Application -Unique
+$FinalReport | Export-Csv `    -Path $CSVReportPath`
+-NoTypeInformation `
+-Encoding UTF8
 
-Write-Host "`n============================================" -ForegroundColor White
-Write-Host "  MUNIT OUTBOUND LEAK AUDIT - FINAL SUMMARY"  -ForegroundColor White
-Write-Host "============================================"  -ForegroundColor White
-Write-Host "  Total projects   : $($Projects.Count)"
-Write-Host "  CLEAN            : $($cleanProjects.Count)"  -ForegroundColor Green
-Write-Host "  LEAK DETECTED    : $($leakProjects.Count)"   -ForegroundColor Red
-Write-Host "  NO LOG / SKIPPED : $($noLog.Count)"          -ForegroundColor Yellow
-Write-Host "  Duration         : $([math]::Round($Duration.TotalSeconds, 1))s"
-Write-Host "============================================"  -ForegroundColor White
+# =========================================================
+
+# 8. FINAL SUMMARY
+
+# =========================================================
+
+$leakProjects = $FinalReport |
+Where-Object { $_.Status -eq "LEAK_DETECTED" } |
+Select-Object -ExpandProperty Application -Unique
+
+$cleanProjects = $FinalReport |
+Where-Object { $_.Status -eq "CLEAN" } |
+Select-Object -ExpandProperty Application -Unique
+
+$noLogProjects = $FinalReport |
+Where-Object { $_.Status -in @("NO_LOG", "NO_TESTS_RAN") } |
+Select-Object -ExpandProperty Application -Unique
+
+Write-Host ''
+Write-Host '============================================' -ForegroundColor White
+Write-Host ' MUNIT OUTBOUND LEAK AUDIT - FINAL SUMMARY ' -ForegroundColor White
+Write-Host '============================================' -ForegroundColor White
+Write-Host " Total Projects : $($Projects.Count)"
+Write-Host " CLEAN           : $($cleanProjects.Count)" -ForegroundColor Green
+Write-Host " LEAK DETECTED   : $($leakProjects.Count)" -ForegroundColor Red
+Write-Host " NO LOG/SKIPPED  : $($noLogProjects.Count)" -ForegroundColor Yellow
+Write-Host " Duration        : $([math]::Round($Duration.TotalMinutes,2)) mins"
+Write-Host '============================================' -ForegroundColor White
 
 if ($leakProjects.Count -gt 0) {
-    Write-Host "`n  Projects with leaks:" -ForegroundColor Red
-    foreach ($p in $leakProjects) {
-        $connectors = (
-            $FinalReport |
-            Where-Object { $_.Application -eq $p -and $_.Status -eq "LEAK_DETECTED" } |
-            Select-Object -ExpandProperty Connector -Unique
-        ) -join ", "
-        Write-Host "    - $p  [$connectors]" -ForegroundColor Red
-    }
+
+```
+Write-Host ''
+Write-Host 'Projects with leaks:' -ForegroundColor Red
+
+foreach ($p in $leakProjects) {
+
+    $connectors = (
+        $FinalReport |
+        Where-Object {
+            $_.Application -eq $p -and
+            $_.Status -eq "LEAK_DETECTED"
+        } |
+        Select-Object -ExpandProperty Connector -Unique
+    ) -join ", "
+
+    Write-Host " - $p [$connectors]" -ForegroundColor Red
+}
+```
+
 }
 
-Write-Host "`n[*] Full report saved to: $CSVReportPath" -ForegroundColor Green
+Write-Host ''
+Write-Host "[*] CSV report saved to: $CSVReportPath" -ForegroundColor Green
