@@ -1,567 +1,370 @@
-###############################################################################
-# MULE / MUNIT OUTBOUND LEAK DETECTOR
+##############################################################################
+# MuleSoft MUnit Outbound Leak Detection Rules
 #
-# PURPOSE
-# -------
-# Detect REAL outbound network activity during MUnit execution.
+# ACTIVATION:
+#   set JAVA_TOOL_OPTIONS=-javaagent:C:\byteman\byteman.jar=^
+#     script:C:\rules\munit-leak-detect.btm,^
+#     boot:C:\byteman\byteman.jar,^
+#     listener:true ^
+#     -Dorg.jboss.byteman.transform.all=true
 #
-# IMPORTANT
-# ---------
-# This file intentionally avoids fragile Mule internal connector classes.
-#
-# Why?
-# Mule internals differ heavily across:
-# - Mule runtime versions
-# - connector versions
-# - AsyncHttpClient versions
-# - Netty/Reactor versions
-#
-# Stable transport-layer interception is FAR more reliable.
-#
-# DESIGN
-# ------
-# Detect outbound activity at:
-# - Socket layer
-# - NIO layer
-# - Netty layer
-# - SSL layer
-# - URL layer
-#
-# This catches:
-# - Mule HTTP connector leaks
-# - JMS broker leaks
-# - DB leaks
-# - SFTP leaks
-# - SMTP leaks
-# - AWS SDK leaks
-# - Any TCP-based connector leaks
-#
-###############################################################################
+# SEARCH IN LOGS:  grep "MUNIT_LEAK" surefire-reports/*.txt
+##############################################################################
 
-###############################################################################
-# 1. CLASSIC SOCKETS
-###############################################################################
 
-RULE SOCKET_CONNECT_TIMEOUT
-CLASS java.net.Socket
-METHOD connect(java.net.SocketAddress,int)
+##############################################################################
+# 1. HTTP CONNECTOR
+# Class:  org.mule.service.http.impl.service.client.GrizzlyHttpClient
+# Source: github.com/mulesoft/mule-http-service (master, verified)
+# doSendAsync is called for ALL outbound HTTP regardless of method, auth,
+# or connection pool reuse. Bypasses Socket.connect entirely.
+##############################################################################
+
+RULE MUNIT_LEAK :: HTTP outbound via GrizzlyHttpClient.doSendAsync
+CLASS org.mule.service.http.impl.service.client.GrizzlyHttpClient
+METHOD doSendAsync
 AT ENTRY
-BIND
-    dest:String = String.valueOf($1);
-IF (
-    dest != null &&
-    !dest.contains("127.0.0.1") &&
-    !dest.contains("localhost") &&
-    !dest.contains("0:0:0:0:0:0:0:1")
-)
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=SOCKET" +
-        "\nDEST=" + dest +
-        "\nTHREAD=" + Thread.currentThread().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][HTTP] Real HTTP request - mock NOT applied." +
+    " URI=" + $1.getUri().toString() +
+    " Method=" + $1.getMethod() +
+    " Thread=" + Thread.currentThread().getName());
+  traceln("[MUNIT_LEAK][HTTP] Stack=" +
+    java.util.Arrays.toString(Thread.currentThread().getStackTrace()))
 ENDRULE
 
-RULE SOCKET_CONNECT
-CLASS java.net.Socket
-METHOD connect(java.net.SocketAddress)
+
+##############################################################################
+# Belt-and-suspenders at connector operation layer (fires before Grizzly).
+# Class:  org.mule.extension.http.internal.request.HttpRequestOperations
+# Source: confirmed via HTTP Connector release notes MULE-16295 (verified)
+##############################################################################
+
+RULE MUNIT_LEAK :: HTTP outbound via HttpRequestOperations.request
+CLASS org.mule.extension.http.internal.request.HttpRequestOperations
+METHOD request
 AT ENTRY
-BIND
-    dest:String = String.valueOf($1);
-IF (
-    dest != null &&
-    !dest.contains("127.0.0.1") &&
-    !dest.contains("localhost") &&
-    !dest.contains("0:0:0:0:0:0:0:1")
-)
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=SOCKET_OVERLOAD" +
-        "\nDEST=" + dest +
-        "\nTHREAD=" + Thread.currentThread().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][HTTP-OP] Real http:request reached connector layer." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 2. SOCKET IMPLEMENTATION LAYER
-#
-# IMPORTANT:
-# Some runtimes bypass java.net.Socket directly.
-###############################################################################
 
-RULE ABSTRACT_SOCKET_CONNECT_1
-CLASS java.net.AbstractPlainSocketImpl
-METHOD connect(java.lang.String,int)
+##############################################################################
+# 2. JMS CONNECTOR
+# Classes: org.mule.extensions.jms.internal.operation.JmsPublish
+#          org.mule.extensions.jms.internal.operation.JmsConsume
+# Source:  github.com/mulesoft/mule-jms-connector (main, verified)
+##############################################################################
+
+RULE MUNIT_LEAK :: JMS publish via JmsPublish.publish
+CLASS org.mule.extensions.jms.internal.operation.JmsPublish
+METHOD publish
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=ABSTRACT_SOCKET_IMPL" +
-        "\nHOST=" + $1 +
-        "\nPORT=" + $2 +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][JMS-PUBLISH] Real JMS publish - mock NOT applied." +
+    " Destination=" + $3 +
+    " Thread=" + Thread.currentThread().getName());
+  traceln("[MUNIT_LEAK][JMS-PUBLISH] Stack=" +
+    java.util.Arrays.toString(Thread.currentThread().getStackTrace()))
 ENDRULE
 
-RULE ABSTRACT_SOCKET_CONNECT_2
-CLASS java.net.AbstractPlainSocketImpl
-METHOD connect(java.net.InetAddress,int)
+RULE MUNIT_LEAK :: JMS consume via JmsConsume.consume
+CLASS org.mule.extensions.jms.internal.operation.JmsConsume
+METHOD consume
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=ABSTRACT_SOCKET_IMPL_INET" +
-        "\nHOST=" + $1 +
-        "\nPORT=" + $2 +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][JMS-CONSUME] Real JMS consume - mock NOT applied." +
+    " Destination=" + $3 +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 3. NIO SOCKETS
-#
-# Many modern JMS/HTTP stacks use NIO directly.
-###############################################################################
 
-RULE NIO_SOCKET_CONNECT
-CLASS sun.nio.ch.SocketChannelImpl
-METHOD connect
+##############################################################################
+# 3. DATABASE CONNECTOR
+# Intercepted at JDBC interface level — stable across ALL DB connector
+# versions and ALL drivers. java.sql interfaces are bootstrap-loaded and
+# always visible to Byteman without classloader issues.
+##############################################################################
+
+RULE MUNIT_LEAK :: DB via PreparedStatement.execute
+INTERFACE java.sql.PreparedStatement
+METHOD execute()
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=NIO_SOCKET" +
-        "\nDEST=" + $1 +
-        "\nTHREAD=" + Thread.currentThread().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][DB] Real DB PreparedStatement.execute() - mock NOT applied." +
+    " ImplClass=" + $0.getClass().getName() +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-RULE NIO_SOCKET_FINISH_CONNECT
-CLASS sun.nio.ch.SocketChannelImpl
-METHOD finishConnect
+RULE MUNIT_LEAK :: DB via PreparedStatement.executeQuery
+INTERFACE java.sql.PreparedStatement
+METHOD executeQuery()
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=NIO_FINISH_CONNECT" +
-        "\nTHREAD=" + Thread.currentThread().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][DB] Real DB PreparedStatement.executeQuery() detected." +
+    " ImplClass=" + $0.getClass().getName() +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 4. NETTY
-#
-# CRITICAL:
-# Mule HTTP connector frequently uses Netty internally.
-###############################################################################
-
-RULE NETTY_BOOTSTRAP_CONNECT
-CLASS io.netty.bootstrap.Bootstrap
-METHOD connect
+RULE MUNIT_LEAK :: DB via PreparedStatement.executeUpdate
+INTERFACE java.sql.PreparedStatement
+METHOD executeUpdate()
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=NETTY_BOOTSTRAP" +
-        "\nDEST=" + $1 +
-        "\nTHREAD=" + Thread.currentThread().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][DB] Real DB PreparedStatement.executeUpdate() detected." +
+    " ImplClass=" + $0.getClass().getName() +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-RULE NETTY_NIO_SOCKET_CONNECT
-CLASS io.netty.channel.socket.nio.NioSocketChannel
-METHOD doConnect
+RULE MUNIT_LEAK :: DB via PreparedStatement.executeBatch
+INTERFACE java.sql.PreparedStatement
+METHOD executeBatch()
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=NETTY_NIO_SOCKET" +
-        "\nREMOTE=" + $1 +
-        "\nLOCAL=" + $2 +
-        "\nTHREAD=" + Thread.currentThread().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][DB] Real DB PreparedStatement.executeBatch() detected." +
+    " ImplClass=" + $0.getClass().getName() +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-RULE NETTY_CHANNEL_CONNECT
-CLASS io.netty.channel.AbstractChannel
-METHOD connect
+RULE MUNIT_LEAK :: DB via Statement.executeQuery(String)
+INTERFACE java.sql.Statement
+METHOD executeQuery(java.lang.String)
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=NETTY_CHANNEL" +
-        "\nDEST=" + $1 +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][DB] Real DB Statement.executeQuery() detected." +
+    " SQL=" + $1 +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 5. REACTOR NETTY
-#
-# Used in newer async stacks.
-###############################################################################
-
-RULE REACTOR_NETTY_CONNECT
-CLASS reactor.netty.transport.TransportConnector
-METHOD connect
+RULE MUNIT_LEAK :: DB via Statement.executeUpdate(String)
+INTERFACE java.sql.Statement
+METHOD executeUpdate(java.lang.String)
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=REACTOR_NETTY" +
-        "\nDEST=" + $1 +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][DB] Real DB Statement.executeUpdate() detected." +
+    " SQL=" + $1 +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 6. SSL / TLS
-#
-# Useful for JMS SSL brokers and HTTPS leaks.
-###############################################################################
-
-RULE SSL_SOCKET_HANDSHAKE
-CLASS javax.net.ssl.SSLSocket
-METHOD startHandshake
+RULE MUNIT_LEAK :: DB via Statement.execute(String)
+INTERFACE java.sql.Statement
+METHOD execute(java.lang.String)
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=SSL_HANDSHAKE" +
-        "\nTHREAD=" + Thread.currentThread().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][DB] Real DB Statement.execute() detected." +
+    " SQL=" + $1 +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-RULE SSL_ENGINE_WRAP
-CLASS javax.net.ssl.SSLEngine
-METHOD wrap
+
+##############################################################################
+# 4. SFTP CONNECTOR
+# Class:  org.mule.extension.sftp.internal.connection.SftpClient
+# Source: github.com/mulesoft/mule-sftp-connector (main + master, verified)
+# Connector >= 2.0.x uses Apache Mina SSHD; < 2.0.x uses jcraft/JSch.
+# All three layers are covered.
+##############################################################################
+
+RULE MUNIT_LEAK :: SFTP write via SftpClient.write
+CLASS org.mule.extension.sftp.internal.connection.SftpClient
+METHOD write
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=SSL_ENGINE_WRAP" +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SFTP-WRITE] Real SFTP write - mock NOT applied." +
+    " Thread=" + Thread.currentThread().getName());
+  traceln("[MUNIT_LEAK][SFTP-WRITE] Stack=" +
+    java.util.Arrays.toString(Thread.currentThread().getStackTrace()))
 ENDRULE
 
-RULE SSL_ENGINE_UNWRAP
-CLASS javax.net.ssl.SSLEngine
-METHOD unwrap
+RULE MUNIT_LEAK :: SFTP read via SftpClient.read
+CLASS org.mule.extension.sftp.internal.connection.SftpClient
+METHOD read
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=SSL_ENGINE_UNWRAP" +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SFTP-READ] Real SFTP read - mock NOT applied." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 7. JAVA URL / URL CONNECTION
-###############################################################################
-
-RULE URL_OPEN_CONNECTION
-CLASS java.net.URL
-METHOD openConnection
+RULE MUNIT_LEAK :: SFTP list via SftpClient.list
+CLASS org.mule.extension.sftp.internal.connection.SftpClient
+METHOD list
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=URL_CONNECTION" +
-        "\nURL=" + $0.toString() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SFTP-LIST] Real SFTP list - mock NOT applied." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-RULE HTTP_URL_CONNECTION_CONNECT
-CLASS java.net.HttpURLConnection
-METHOD connect
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=HTTP_URL_CONNECTION" +
-        "\nURL=" + $0.getURL() +
-        "\n"
-    );
-ENDRULE
-
-###############################################################################
-# 8. APACHE HTTP CLIENT
-###############################################################################
-
-RULE APACHE_HTTP_EXECUTE
-CLASS org.apache.http.impl.execchain.MainClientExec
-METHOD execute
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=APACHE_HTTP" +
-        "\nTARGET=" + $1 +
-        "\nREQUEST=" + $2 +
-        "\n"
-    );
-ENDRULE
-
-###############################################################################
-# 9. ASYNC HTTP CLIENT
-#
-# Common in Mule runtimes.
-###############################################################################
-
-RULE ASYNC_HTTP_EXECUTE
-CLASS org.asynchttpclient.DefaultAsyncHttpClient
-METHOD executeRequest
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=ASYNC_HTTP_CLIENT" +
-        "\nREQUEST=" + $1 +
-        "\n"
-    );
-ENDRULE
-
-RULE ASYNC_HTTP_NETTY_SEND
-CLASS org.asynchttpclient.netty.NettyRequestSender
-METHOD sendRequest
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=ASYNC_HTTP_NETTY" +
-        "\n"
-    );
-ENDRULE
-
-###############################################################################
-# 10. JAVA 11+ HTTP CLIENT
-###############################################################################
-
-RULE JAVA11_HTTP_SEND
-CLASS jdk.internal.net.http.HttpClientImpl
-METHOD send
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=JAVA11_HTTP_CLIENT" +
-        "\n"
-    );
-ENDRULE
-
-###############################################################################
-# 11. JMS GENERIC
-#
-# IMPORTANT:
-# Detects publish attempts even if actual socket path differs.
-###############################################################################
-
-RULE JMS_MESSAGE_PRODUCER_SEND
-INTERFACE javax.jms.MessageProducer
-METHOD send
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=JMS_SEND" +
-        "\nCLASS=" + $0.getClass().getName() +
-        "\n"
-    );
-ENDRULE
-
-RULE JMS_CONNECTION_START
-INTERFACE javax.jms.Connection
-METHOD start
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=JMS_CONNECTION_START" +
-        "\nCLASS=" + $0.getClass().getName() +
-        "\n"
-    );
-ENDRULE
-
-RULE JMS_CREATE_SESSION
-INTERFACE javax.jms.Connection
-METHOD createSession
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=JMS_CREATE_SESSION" +
-        "\n"
-    );
-ENDRULE
-
-###############################################################################
-# 12. ACTIVEMQ CLASSIC
-###############################################################################
-
-RULE ACTIVEMQ_SEND
-CLASS org.apache.activemq.ActiveMQMessageProducer
-METHOD send
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=ACTIVEMQ_SEND" +
-        "\n"
-    );
-ENDRULE
-
-###############################################################################
-# 13. ACTIVEMQ ARTEMIS
-###############################################################################
-
-RULE ARTEMIS_SEND
-CLASS org.apache.activemq.artemis.jms.client.ActiveMQMessageProducer
-METHOD send
-AT ENTRY
-DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=ARTEMIS_SEND" +
-        "\n"
-    );
-ENDRULE
-
-###############################################################################
-# 14. IBM MQ
-###############################################################################
-
-RULE IBM_MQ_PUT
-CLASS com.ibm.mq.MQQueue
+# jcraft path — connector < 2.0.x
+RULE MUNIT_LEAK :: SFTP write via JSch ChannelSftp.put
+CLASS com.jcraft.jsch.ChannelSftp
 METHOD put
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=IBM_MQ_PUT" +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SFTP-JCRAFT-WRITE] Real SFTP put via JSch detected." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 15. JDBC
-###############################################################################
-
-RULE JDBC_CONNECT
-INTERFACE java.sql.Driver
-METHOD connect
+RULE MUNIT_LEAK :: SFTP read via JSch ChannelSftp.get
+CLASS com.jcraft.jsch.ChannelSftp
+METHOD get
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=JDBC_CONNECT" +
-        "\nURL=" + $1 +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SFTP-JCRAFT-READ] Real SFTP get via JSch detected." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-RULE DATASOURCE_GET_CONNECTION
-INTERFACE javax.sql.DataSource
-METHOD getConnection
+# Apache Mina transport layer — connector >= 2.0.x
+RULE MUNIT_LEAK :: SFTP write via Mina AbstractSftpClient.write
+CLASS org.apache.sshd.sftp.client.impl.AbstractSftpClient
+METHOD write
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=DATASOURCE_CONNECTION" +
-        "\nCLASS=" + $0.getClass().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SFTP-MINA-WRITE] Real SFTP write via Apache Mina SSHD detected." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 16. SFTP / FTP
-###############################################################################
 
-RULE JSCH_CONNECT
-CLASS com.jcraft.jsch.Session
-METHOD connect
+##############################################################################
+# 5. VM CONNECTOR
+# Class: org.mule.extensions.vm.internal.VMConnectorQueueManager
+# Central broker for all VM publish/consume operations.
+##############################################################################
+
+RULE MUNIT_LEAK :: VM publish via VMConnectorQueueManager.publish
+CLASS org.mule.extensions.vm.internal.VMConnectorQueueManager
+METHOD publish
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=SFTP_JSCH" +
-        "\nHOST=" + $0.getHost() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][VM-PUBLISH] Real VM publish - mock NOT applied." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-RULE FTP_CONNECT
-CLASS org.apache.commons.net.ftp.FTPClient
-METHOD connect
+
+##############################################################################
+# 6. OBJECT STORE CONNECTOR
+# Class: org.mule.extension.objectstore.internal.ObjectStoreOperations
+##############################################################################
+
+RULE MUNIT_LEAK :: ObjectStore store
+CLASS org.mule.extension.objectstore.internal.ObjectStoreOperations
+METHOD store
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=FTP_CONNECT" +
-        "\nHOST=" + $1 +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][OS-STORE] Real ObjectStore store - mock NOT applied." +
+    " Key=" + $2 +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 17. SMTP
-###############################################################################
-
-RULE JAVAMAIL_CONNECT
-CLASS javax.mail.Service
-METHOD connect
+RULE MUNIT_LEAK :: ObjectStore retrieve
+CLASS org.mule.extension.objectstore.internal.ObjectStoreOperations
+METHOD retrieve
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=SMTP_CONNECT" +
-        "\nCLASS=" + $0.getClass().getName() +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][OS-RETRIEVE] Real ObjectStore retrieve - mock NOT applied." +
+    " Key=" + $2 +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 18. LDAP
-###############################################################################
 
-RULE LDAP_INIT
-CLASS javax.naming.directory.InitialDirContext
-METHOD <init>
+##############################################################################
+# 7. SALESFORCE CONNECTOR
+# Class: com.sforce.ws.transport.JdkHttpTransport
+# Stable across all Salesforce connector versions that use WSC library.
+##############################################################################
+
+RULE MUNIT_LEAK :: Salesforce via JdkHttpTransport.connectRaw
+CLASS com.sforce.ws.transport.JdkHttpTransport
+METHOD connectRaw
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=LDAP_INIT" +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SALESFORCE] Real Salesforce API call - mock NOT applied." +
+    " URL=" + $1 +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# 19. REDIS
-###############################################################################
 
-RULE REDIS_CONNECT
-CLASS redis.clients.jedis.Connection
-METHOD connect
+##############################################################################
+# 8. SAP CONNECTOR
+# Class: com.sap.conn.jco.rt.DefaultRfcDestination
+# JCo RFC dispatch point for all SAP BAPI/RFC calls.
+##############################################################################
+
+RULE MUNIT_LEAK :: SAP RFC via DefaultRfcDestination.execute
+CLASS com.sap.conn.jco.rt.DefaultRfcDestination
+METHOD execute
 AT ENTRY
+IF true
 DO
-    traceln(
-        "\n[OUTBOUND-LEAK]" +
-        "\nTYPE=REDIS_CONNECT" +
-        "\n"
-    );
+  traceln("[MUNIT_LEAK][SAP-RFC] Real SAP RFC call - mock NOT applied." +
+    " Thread=" + Thread.currentThread().getName())
 ENDRULE
 
-###############################################################################
-# END
-###############################################################################
+
+##############################################################################
+# 9. EMAIL / SMTP CONNECTOR
+# Class: javax.mail.Transport
+# Bootstrap-loaded; stable across all email connector versions.
+##############################################################################
+
+RULE MUNIT_LEAK :: Email SMTP send via Transport.send
+CLASS javax.mail.Transport
+METHOD send(javax.mail.Message)
+AT ENTRY
+IF true
+DO
+  traceln("[MUNIT_LEAK][EMAIL-SMTP] Real SMTP send - mock NOT applied." +
+    " Subject=" + $1.getSubject() +
+    " Thread=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE MUNIT_LEAK :: Email SMTP sendMessage via Transport.sendMessage
+CLASS javax.mail.Transport
+METHOD sendMessage
+AT ENTRY
+IF true
+DO
+  traceln("[MUNIT_LEAK][EMAIL-SMTP] Real SMTP sendMessage detected." +
+    " Thread=" + Thread.currentThread().getName())
+ENDRULE
+
+
+##############################################################################
+# 10. CATCH-ALL — MULE SDK OPERATION PROCESSOR (disabled by default)
+# Class: org.mule.runtime.module.extension.internal.runtime.operation
+#          .OperationMessageProcessor
+# MUnit mock-when intercepts here. If doProcess is reached during a test,
+# the operation was NOT mocked. HIGH NOISE — uncomment only for diagnosis.
+##############################################################################
+
+# RULE MUNIT_LEAK :: CATCH-ALL OperationMessageProcessor.doProcess
+# CLASS org.mule.runtime.module.extension.internal.runtime.operation.OperationMessageProcessor
+# METHOD doProcess
+# AT ENTRY
+# IF true
+# DO
+#   traceln("[MUNIT_LEAK][CATCH-ALL] Unmocked extension operation: " +
+#     $0.getClass().getName() +
+#     " Thread=" + Thread.currentThread().getName())
+# ENDRULE
