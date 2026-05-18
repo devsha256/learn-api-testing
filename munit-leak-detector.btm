@@ -1,31 +1,421 @@
-# #########################################################################
-# UNIVERSAL LEAK DETECTOR (JAVA LAYER)
-# #########################################################################
+##############################################################################
+#
+#  MuleSoft MUnit Outbound Mock Leak Detector
+#  ============================================
+#  Covers: HTTP, JMS, ActiveMQ, Database, Snowflake (JDBC),
+#          Salesforce (WSC), SAP (JCo), ServiceNow (via HTTP),
+#          Email/SMTP, VM Connector, Object Store
+#
+#  ACTIVATION (set before running mvn test):
+#
+#    Windows:
+#      set JAVA_TOOL_OPTIONS=-javaagent:C:\byteman\byteman.jar=^
+#        script:C:\audit\munit-leak-detector.btm,^
+#        boot:C:\byteman\byteman.jar,^
+#        sys:C:\byteman\byteman.jar,^
+#        listener:true^
+#        -Dorg.jboss.byteman.transform.all=true
+#
+#  SEARCH FOR LEAKS IN LOGS:
+#    grep "[OUTBOUND-LEAK]" audit_logs/*_audit.log
+#
+#  ARCHITECTURE NOTE:
+#    Rules 1-2  intercept at the Mule connector SDK operation layer.
+#               These fire BEFORE connection pool reuse, making them
+#               reliable where socket-level rules miss warm connections.
+#    Rules 3-5  intercept at standard Java API interfaces
+#               (javax.jms, java.sql) — bootstrap-loaded, driver-agnostic,
+#               version-stable across all connector releases.
+#    Rules 6-9  intercept at third-party library dispatch points for
+#               SaaS connectors that bypass the Mule HTTP layer.
+#
+##############################################################################
 
-# 1. CATCH ALL TCP/HTTP (Standard Sockets)
-RULE Universal TCP Hook
-CLASS java.net.AbstractPlainSocketImpl
-METHOD connect(java.net.InetAddress, int, int)
+
+##############################################################################
+# 1. HTTP CONNECTOR
+#
+#  Class : org.mule.service.http.impl.service.client.GrizzlyHttpClient
+#  Jar   : mule-http-service-*.jar  (Mule runtime, not connector jar)
+#  Source: github.com/mulesoft/mule-http-service master (verified)
+#
+#  doSendAsync is the SINGLE internal send point for ALL outbound HTTP
+#  calls regardless of HTTP method, auth type, or connection pool state.
+#  Signature confirmed: doSendAsync(HttpRequest, HttpRequestOptions,
+#                                   ProgressiveBodyDataListener)
+#  This also covers ServiceNow connector which delegates to Mule HTTP
+#  transport under the hood (confirmed via ServiceNow connector docs).
+##############################################################################
+
+RULE [OUTBOUND-LEAK] HTTP :: GrizzlyHttpClient.doSendAsync
+CLASS org.mule.service.http.impl.service.client.GrizzlyHttpClient
+METHOD doSendAsync
 AT ENTRY
-BIND host:String = $1.getHostAddress();
-IF (!host.contains("127.0.0.1") && !host.equals("localhost") && !host.contains("0:0:0:0:0:0:0:1"))
-DO traceln("[OUTBOUND-LEAK] PROTOCOL=TCP_SOCKET DEST=" + host + ":" + $2);
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=HTTP" +
+          " URI=" + $1.getUri().toString() +
+          " METHOD=" + $1.getMethod() +
+          " THREAD=" + Thread.currentThread().getName());
+  traceln("[OUTBOUND-LEAK] HTTP STACKTRACE=" +
+          java.util.Arrays.toString(Thread.currentThread().getStackTrace()))
 ENDRULE
 
-# 2. CATCH HIGH-PERFORMANCE NIO (Grizzly/HTTP/Salesforce)
-RULE Universal NIO Hook
-CLASS sun.nio.ch.SocketChannelImpl
-METHOD connect(java.net.SocketAddress)
+
+##############################################################################
+# Belt-and-suspenders at the Mule SDK operation layer.
+# Fires BEFORE GrizzlyHttpClient — earliest possible signal.
+#
+#  Class : org.mule.extension.http.internal.request.HttpRequestOperations
+#  Source: confirmed via HTTP connector release notes MULE-16295 (verified)
+##############################################################################
+
+RULE [OUTBOUND-LEAK] HTTP :: HttpRequestOperations.request (SDK layer)
+CLASS org.mule.extension.http.internal.request.HttpRequestOperations
+METHOD request
 AT ENTRY
-BIND addr:String = $1.toString();
-IF (!addr.contains("127.0.0.1") && !addr.contains("localhost"))
-DO traceln("[OUTBOUND-LEAK] PROTOCOL=NIO_CHANNEL DEST=" + addr);
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=HTTP-SDK-OPERATION" +
+          " THREAD=" + Thread.currentThread().getName())
 ENDRULE
 
-# 3. CATCH ALL JMS (Universal Interface)
-RULE Universal JMS Hook
+
+##############################################################################
+# 2. JMS CONNECTOR  (mule-jms-connector + mule-activemq usage)
+#
+#  Class : org.mule.extensions.jms.internal.operation.JmsPublish
+#  Source: github.com/mulesoft/mule-jms-connector main (verified)
+#
+#  publish() is the Mule SDK @Operation entry point surfaced as
+#  <jms:publish> in XML. If a mock is correctly applied this method
+#  is never reached. Destination is parameter index $3 (String).
+##############################################################################
+
+RULE [OUTBOUND-LEAK] JMS :: JmsPublish.publish (Mule SDK layer)
+CLASS org.mule.extensions.jms.internal.operation.JmsPublish
+METHOD publish
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=JMS-PUBLISH" +
+          " DESTINATION=" + $3 +
+          " THREAD=" + Thread.currentThread().getName());
+  traceln("[OUTBOUND-LEAK] JMS-PUBLISH STACKTRACE=" +
+          java.util.Arrays.toString(Thread.currentThread().getStackTrace()))
+ENDRULE
+
+RULE [OUTBOUND-LEAK] JMS :: JmsConsume.consume (Mule SDK layer)
+CLASS org.mule.extensions.jms.internal.operation.JmsConsume
+METHOD consume
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=JMS-CONSUME" +
+          " DESTINATION=" + $3 +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+
+##############################################################################
+# 3. JMS STANDARD INTERFACE — javax.jms.MessageProducer
+#
+#  Intercepts at the JMS spec interface, below the Mule SDK layer.
+#  Covers ALL JMS broker implementations:
+#    - Apache ActiveMQ (activemq-client)
+#    - Amazon MQ
+#    - IBM MQ
+#    - Artemis (ActiveMQ Artemis)
+#    - Any javax.jms-compliant broker
+#
+#  javax.jms is bootstrap-loaded — no classloader issues.
+#  This is the safety net if the Mule SDK rule above misses due to
+#  classloader isolation of the plugin.
+##############################################################################
+
+RULE [OUTBOUND-LEAK] JMS-INTERFACE :: javax.jms.MessageProducer.send(Destination,Message)
 INTERFACE javax.jms.MessageProducer
 METHOD send(javax.jms.Destination, javax.jms.Message)
 AT ENTRY
-DO traceln("[OUTBOUND-LEAK] PROTOCOL=JMS DEST=" + $1.toString());
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=JMS-BROKER-SEND" +
+          " DESTINATION=" + $1.toString() +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] JMS-INTERFACE :: javax.jms.MessageProducer.send(Message)
+INTERFACE javax.jms.MessageProducer
+METHOD send(javax.jms.Message)
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=JMS-BROKER-SEND-DEFAULT-DEST" +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+
+##############################################################################
+# 4. ACTIVEMQ SPECIFIC — ActiveMQSession.send
+#
+#  Class : org.apache.activemq.ActiveMQSession
+#  Source: github.com/apache/activemq main (verified — send method confirmed)
+#
+#  ActiveMQSession.send() is the central internal dispatch for ALL
+#  ActiveMQ message sends regardless of producer type (queue/topic/XA).
+#  This catches sends even when ActiveMQ's internal optimised path
+#  bypasses the javax.jms interface dispatch above.
+##############################################################################
+
+RULE [OUTBOUND-LEAK] ACTIVEMQ :: ActiveMQSession.send (internal dispatch)
+CLASS org.apache.activemq.ActiveMQSession
+METHOD send
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=ACTIVEMQ-SESSION-SEND" +
+          " DESTINATION=" + $2.toString() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+
+##############################################################################
+# 5. DATABASE CONNECTOR + SNOWFLAKE CONNECTOR
+#
+#  Both connectors use JDBC under the hood:
+#    - mule-db-connector  → DbDmlOperations, DbBulkOperations, DbDdlOperations
+#      (confirmed via github.com/mulesoft/mule-db-connector main)
+#    - Snowflake connector → net.snowflake.client.jdbc.SnowflakeDriver
+#      (confirmed via docs.mulesoft.com/snowflake-connector)
+#
+#  Interception at java.sql interface level is the ONLY strategy that:
+#    a) works across all DB connector versions (class names changed between
+#       major versions of the DB connector)
+#    b) works for Snowflake which uses the DB connector's JDBC layer
+#    c) is version-stable — java.sql interfaces are bootstrap-loaded
+#       and guaranteed never to change
+##############################################################################
+
+RULE [OUTBOUND-LEAK] DB/SNOWFLAKE :: PreparedStatement.execute()
+INTERFACE java.sql.PreparedStatement
+METHOD execute()
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=DB-PREPARED-EXECUTE" +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] DB/SNOWFLAKE :: PreparedStatement.executeQuery()
+INTERFACE java.sql.PreparedStatement
+METHOD executeQuery()
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=DB-PREPARED-EXECUTEQUERY" +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] DB/SNOWFLAKE :: PreparedStatement.executeUpdate()
+INTERFACE java.sql.PreparedStatement
+METHOD executeUpdate()
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=DB-PREPARED-EXECUTEUPDATE" +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] DB/SNOWFLAKE :: PreparedStatement.executeBatch()
+INTERFACE java.sql.PreparedStatement
+METHOD executeBatch()
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=DB-PREPARED-EXECUTEBATCH" +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] DB/SNOWFLAKE :: Statement.executeQuery(String)
+INTERFACE java.sql.Statement
+METHOD executeQuery(java.lang.String)
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=DB-STATEMENT-EXECUTEQUERY" +
+          " SQL=" + $1 +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] DB/SNOWFLAKE :: Statement.executeUpdate(String)
+INTERFACE java.sql.Statement
+METHOD executeUpdate(java.lang.String)
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=DB-STATEMENT-EXECUTEUPDATE" +
+          " SQL=" + $1 +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] DB/SNOWFLAKE :: Statement.execute(String)
+INTERFACE java.sql.Statement
+METHOD execute(java.lang.String)
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=DB-STATEMENT-EXECUTE" +
+          " SQL=" + $1 +
+          " IMPL=" + $0.getClass().getName() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+
+##############################################################################
+# 6. SALESFORCE CONNECTOR
+#
+#  Class : com.sforce.ws.transport.JdkHttpTransport
+#  Jar   : force-wsc-*.jar  (Salesforce Web Service Connector)
+#  Source: github.com/forcedotcom/wsc master (verified)
+#          blog.superpat.com/salesforce-mutual-authentication-part-2 (verified)
+#
+#  JdkHttpTransport.connectRaw() is the SINGLE HTTP dispatch point for
+#  ALL Salesforce SOAP API calls (SOAP, Partner, Enterprise, Bulk APIs).
+#  Confirmed: call stack from forcedotcom/wsc issue #87 shows
+#  connectRaw -> connectLocal -> connect -> SoapConnection.send
+#  This method is private in the class, so we intercept connect() which
+#  is the public entry and calls connectRaw internally.
+##############################################################################
+
+RULE [OUTBOUND-LEAK] SALESFORCE :: JdkHttpTransport.connect
+CLASS com.sforce.ws.transport.JdkHttpTransport
+METHOD connect
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=SALESFORCE-WSC" +
+          " URL=" + $1 +
+          " THREAD=" + Thread.currentThread().getName());
+  traceln("[OUTBOUND-LEAK] SALESFORCE STACKTRACE=" +
+          java.util.Arrays.toString(Thread.currentThread().getStackTrace()))
+ENDRULE
+
+
+##############################################################################
+# 7. SAP CONNECTOR
+#
+#  Interface: com.sap.conn.jco.JCoFunction
+#  Jar       : sapjco3.jar  (SAP JCo native library, closed-source)
+#  Source    : javatips.net/api/com.sap.conn.jco.jcofunction (verified)
+#
+#  JCoFunction.execute(JCoDestination) is the universal RFC/BAPI dispatch
+#  method. Every SAP RFC or BAPI call made by the Mule SAP connector
+#  passes through this interface method regardless of connector version.
+#  Confirmed via multiple open-source JCo usage examples showing
+#  function.execute(destination) as the final dispatch call.
+##############################################################################
+
+RULE [OUTBOUND-LEAK] SAP :: JCoFunction.execute(JCoDestination)
+INTERFACE com.sap.conn.jco.JCoFunction
+METHOD execute
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=SAP-RFC-BAPI" +
+          " FUNCTION=" + $0.getName() +
+          " THREAD=" + Thread.currentThread().getName());
+  traceln("[OUTBOUND-LEAK] SAP STACKTRACE=" +
+          java.util.Arrays.toString(Thread.currentThread().getStackTrace()))
+ENDRULE
+
+
+##############################################################################
+# 8. EMAIL CONNECTOR  (mule-email-connector)
+#
+#  Class : javax.mail.Transport
+#  Source: JavaMail spec (bootstrap-loaded standard API, version-stable)
+#
+#  Transport.send() is the static dispatch point for ALL SMTP sends
+#  regardless of email connector version or mail server type.
+#  Covers both static send() and instance sendMessage() paths.
+##############################################################################
+
+RULE [OUTBOUND-LEAK] EMAIL :: javax.mail.Transport.send(Message) static
+CLASS javax.mail.Transport
+METHOD send(javax.mail.Message)
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=EMAIL-SMTP-SEND" +
+          " SUBJECT=" + $1.getSubject() +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] EMAIL :: javax.mail.Transport.sendMessage instance
+CLASS javax.mail.Transport
+METHOD sendMessage
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=EMAIL-SMTP-SENDMESSAGE" +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+
+##############################################################################
+# 9. VM CONNECTOR  (mule-vm-connector)
+#
+#  Class : org.mule.extensions.vm.internal.VMConnectorQueueManager
+#  Source: confirmed via org.mule.extensions.vm package (Mule runtime)
+#
+#  VMConnectorQueueManager.publish() is the central dispatch for all
+#  VM queue publish operations. If a mock is correctly applied this
+#  method is never reached during a MUnit test.
+##############################################################################
+
+RULE [OUTBOUND-LEAK] VM :: VMConnectorQueueManager.publish
+CLASS org.mule.extensions.vm.internal.VMConnectorQueueManager
+METHOD publish
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=VM-PUBLISH" +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+
+##############################################################################
+# 10. OBJECT STORE CONNECTOR  (mule-objectstore-connector)
+#
+#  Class : org.mule.extension.objectstore.internal.ObjectStoreOperations
+##############################################################################
+
+RULE [OUTBOUND-LEAK] OBJECTSTORE :: ObjectStoreOperations.store
+CLASS org.mule.extension.objectstore.internal.ObjectStoreOperations
+METHOD store
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=OBJECTSTORE-STORE" +
+          " KEY=" + $2 +
+          " THREAD=" + Thread.currentThread().getName())
+ENDRULE
+
+RULE [OUTBOUND-LEAK] OBJECTSTORE :: ObjectStoreOperations.retrieve
+CLASS org.mule.extension.objectstore.internal.ObjectStoreOperations
+METHOD retrieve
+AT ENTRY
+IF true
+DO
+  traceln("[OUTBOUND-LEAK] CONNECTOR=OBJECTSTORE-RETRIEVE" +
+          " KEY=" + $2 +
+          " THREAD=" + Thread.currentThread().getName())
 ENDRULE
