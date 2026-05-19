@@ -95,9 +95,8 @@ foreach ($ProjName in $Projects) {
     # FIX 3: mvn command on a single line inside the heredoc.
     #         Backtick continuations do not work inside @" "@ and
     #         caused the NativeCommandError in the previous run.
-    $ChildScript = @"
+        $ChildScript = @"
 `$Host.UI.RawUI.WindowTitle = 'AUDIT: $ProjName'
-
 Write-Host '========================================' -ForegroundColor Cyan
 Write-Host '  PROJECT : $ProjName' -ForegroundColor Cyan
 Write-Host '  PORT    : $JobPort'  -ForegroundColor Cyan
@@ -112,7 +111,7 @@ git pull origin dev
 `$env:JAVA_TOOL_OPTIONS = '$JavaToolOptions'
 
 Write-Host '--- RUNNING MUNIT ---' -ForegroundColor Yellow
-mvn clean test "-Denv=dev" "-Dhttp.port=$JobPort" "-Dmunit.dynamic.port=$JobPort" "-Dmaven.clean.failOnError=false" "--no-transfer-progress" 2>&1 | Tee-Object -FilePath '$CurrentLog'
+mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report "-Dsecurekey=pass@2025" "-Denv=dev" "--no-transfer-progress" 2>&1 | Tee-Object -FilePath '$CurrentLog'
 
 `$env:JAVA_TOOL_OPTIONS = ''
 Set-Content '$DoneMarker' 'DONE'
@@ -122,6 +121,7 @@ Write-Host '  DONE: $ProjName' -ForegroundColor Cyan
 Write-Host '========================================' -ForegroundColor Cyan
 Read-Host 'Press ENTER to close this window'
 "@
+
 
     $p = Start-Process powershell.exe `
         -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $ChildScript `
