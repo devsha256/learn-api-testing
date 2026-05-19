@@ -34,19 +34,19 @@ Get-ChildItem $LogDir -Filter "*.done" | Remove-Item -Force -ErrorAction Silentl
 # LEAK PATTERNS — one per connector matching BTM output
 # =========================================================
 $LeakPatterns = @(
-    [PSCustomObject]@{ Connector = "HTTP"         ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=HTTP\b"                },
-    [PSCustomObject]@{ Connector = "HTTP-SDK"     ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=HTTP-SDK-OPERATION"   },
-    [PSCustomObject]@{ Connector = "JMS-PUBLISH"  ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=JMS-PUBLISH"          },
-    [PSCustomObject]@{ Connector = "JMS-CONSUME"  ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=JMS-CONSUME"          },
-    [PSCustomObject]@{ Connector = "JMS-BROKER"   ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=JMS-BROKER-SEND"      },
-    [PSCustomObject]@{ Connector = "ACTIVEMQ"     ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=ACTIVEMQ-SESSION-SEND"},
-    [PSCustomObject]@{ Connector = "DATABASE"     ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=DB-"                  },
-    [PSCustomObject]@{ Connector = "SALESFORCE"   ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=SALESFORCE-WSC"       },
-    [PSCustomObject]@{ Connector = "SAP"          ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=SAP-RFC-BAPI"         },
-    [PSCustomObject]@{ Connector = "EMAIL"        ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=EMAIL-SMTP"           },
-    [PSCustomObject]@{ Connector = "VM"           ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=VM-PUBLISH"           },
-    [PSCustomObject]@{ Connector = "OBJECT-STORE" ; Pattern = "\[OUTBOUND-LEAK\] CONNECTOR=OBJECTSTORE-"         }
+    [PSCustomObject]@{ Connector = "HTTP"        ; Pattern = "DEBUG.*HttpRequestOperations.*"  },
+    [PSCustomObject]@{ Connector = "JMS-PUBLISH" ; Pattern = "DEBUG.*JmsPublish.*"             },
+    [PSCustomObject]@{ Connector = "JMS-CONSUME" ; Pattern = "DEBUG.*JmsConsume.*"             },
+    [PSCustomObject]@{ Connector = "DATABASE"    ; Pattern = "DEBUG.*extension\.db.*"          },
+    [PSCustomObject]@{ Connector = "SFTP"        ; Pattern = "DEBUG.*extension\.sftp.*"        },
+    [PSCustomObject]@{ Connector = "SALESFORCE"  ; Pattern = "DEBUG.*extension\.salesforce.*"  },
+    [PSCustomObject]@{ Connector = "SAP"         ; Pattern = "DEBUG.*extension\.sap.*"         },
+    [PSCustomObject]@{ Connector = "EMAIL"       ; Pattern = "DEBUG.*extension\.email.*"       },
+    [PSCustomObject]@{ Connector = "VM"          ; Pattern = "DEBUG.*extensions\.vm.*"         },
+    [PSCustomObject]@{ Connector = "ACTIVEMQ"    ; Pattern = "DEBUG.*ActiveMQ.*"               },
+    [PSCustomObject]@{ Connector = "OBJECTSTORE" ; Pattern = "DEBUG.*objectstore.*"            }
 )
+
 
 # =========================================================
 # 2. BUILD JAVA_TOOL_OPTIONS ONCE
@@ -55,14 +55,8 @@ $LeakPatterns = @(
 #            which causes BindException when multiple
 #            child windows run in parallel
 # =========================================================
-$JavaToolOptions = (
-    "-javaagent:`"$BytemanJar`"=" +
-    "script:`"$BytemanScript`"," +
-    "boot:`"$BytemanJar`"," +
-    "sys:`"$BytemanJar`"" +
-    " -Dorg.jboss.byteman.transform.all=true" +
-    " -Dlog4j.configurationFile=`"$Log4jConfig`""
-)
+$JavaToolOptions = "-Dlog4j.configurationFile=`"$Log4jConfig`""
+
 
 # =========================================================
 # 3. LAUNCH ONE WINDOW PER PROJECT
