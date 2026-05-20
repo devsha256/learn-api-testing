@@ -90,26 +90,29 @@ git pull origin dev
 
 Write-Host '--- STARTING MUNIT ---' -ForegroundColor Yellow
 
-`$mvnProc = Start-Process "mvn" -ArgumentList "clean","test","com.mulesoft.munit.tools:munit-maven-plugin:coverage-report","-Dsecurekey=pass@2025","-Denv=dev","--no-transfer-progress" -PassThru -NoNewWindow -RedirectStandardOutput '$CurrentLog' -RedirectStandardError '${CurrentLog}.err'
+`$mvnJob = Start-Job -ScriptBlock {
+    param(`$path, `$log)
+    Set-Location `$path
+    & cmd /c "mvn clean test com.mulesoft.munit.tools:munit-maven-plugin:coverage-report -Dsecurekey=pass@2025 -Denv=dev --no-transfer-progress 2>&1" | Tee-Object -FilePath `$log
+} -ArgumentList '$FullPath', '$CurrentLog'
 
-if (`$mvnProc -eq `$null) {
-    Write-Host "ERROR: mvn failed to start" -ForegroundColor Red
-    Read-Host 'Press ENTER to close'
-    exit 1
-}
+`$mvnPid = (Get-Process | Where-Object { `$_.Name -eq 'java' } | Sort-Object StartTime -Descending | Select-Object -First 1).Id
 
-Write-Host "  mvn PID: `$(`$mvnProc.Id)" -ForegroundColor DarkGray
+Write-Host "  java PID: `$mvnPid" -ForegroundColor DarkGray
 
-`$snifferProc = Start-Process "python" -ArgumentList "$SnifferScript","--pid","`$(`$mvnProc.Id)","--project","$ProjName","--out","$LeakDir" -PassThru -NoNewWindow -RedirectStandardOutput '$LeakDir\${ProjName}_sniffer.log' -RedirectStandardError '$LeakDir\${ProjName}_sniffer.err'
+`$snifferProc = Start-Process "python" -ArgumentList "$SnifferScript","--pid","`$mvnPid","--project","$ProjName","--out","$LeakDir" -PassThru -NoNewWindow -RedirectStandardOutput '$LeakDir\${ProjName}_sniffer.log' -RedirectStandardError '$LeakDir\${ProjName}_sniffer.err'
 
 Write-Host "  sniffer PID: `$(`$snifferProc.Id)" -ForegroundColor DarkGray
 
-`$mvnProc.WaitForExit()
-
-Get-Content '${CurrentLog}.err' -ErrorAction SilentlyContinue | Add-Content '$CurrentLog'
-Remove-Item '${CurrentLog}.err' -ErrorAction SilentlyContinue
+while (`$mvnJob.State -eq 'Running') {
+    Receive-Job -Job `$mvnJob
+    Start-Sleep -Milliseconds 500
+}
+Receive-Job -Job `$mvnJob
+Remove-Job -Job `$mvnJob -Force
 
 `$snifferProc.WaitForExit(15000) | Out-Null
+
 
 Set-Content '$DoneMarker' 'DONE'
 
