@@ -90,12 +90,7 @@ git pull origin dev
 
 Write-Host '--- STARTING MUNIT ---' -ForegroundColor Yellow
 
-`$mvnProc = Start-Process "mvn" `
-    -ArgumentList "clean","test","com.mulesoft.munit.tools:munit-maven-plugin:coverage-report","-Dsecurekey=pass@2025","-Denv=dev","--no-transfer-progress" `
-    -PassThru `
-    -NoNewWindow `
-    -RedirectStandardOutput '$CurrentLog' `
-    -RedirectStandardError  '${CurrentLog}.err'
+`$mvnProc = Start-Process "mvn" -ArgumentList "clean","test","com.mulesoft.munit.tools:munit-maven-plugin:coverage-report","-Dsecurekey=pass@2025","-Denv=dev","--no-transfer-progress" -PassThru -NoNewWindow -RedirectStandardOutput '$CurrentLog' -RedirectStandardError '${CurrentLog}.err'
 
 if (`$mvnProc -eq `$null) {
     Write-Host "ERROR: mvn failed to start" -ForegroundColor Red
@@ -105,12 +100,7 @@ if (`$mvnProc -eq `$null) {
 
 Write-Host "  mvn PID: `$(`$mvnProc.Id)" -ForegroundColor DarkGray
 
-`$snifferProc = Start-Process "python" `
-    -ArgumentList "$SnifferScript","--pid","`$(`$mvnProc.Id)","--project","$ProjName","--out","$LeakDir" `
-    -PassThru `
-    -NoNewWindow `
-    -RedirectStandardOutput '$LeakDir/${ProjName}_sniffer.log' `
-    -RedirectStandardError  '$LeakDir/${ProjName}_sniffer.log'
+`$snifferProc = Start-Process "python" -ArgumentList "$SnifferScript","--pid","`$(`$mvnProc.Id)","--project","$ProjName","--out","$LeakDir" -PassThru -NoNewWindow -RedirectStandardOutput '$LeakDir\${ProjName}_sniffer.log' -RedirectStandardError '$LeakDir\${ProjName}_sniffer.err'
 
 Write-Host "  sniffer PID: `$(`$snifferProc.Id)" -ForegroundColor DarkGray
 
@@ -120,7 +110,6 @@ Get-Content '${CurrentLog}.err' -ErrorAction SilentlyContinue | Add-Content '$Cu
 Remove-Item '${CurrentLog}.err' -ErrorAction SilentlyContinue
 
 `$snifferProc.WaitForExit(15000) | Out-Null
-
 
 Set-Content '$DoneMarker' 'DONE'
 
