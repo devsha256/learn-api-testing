@@ -42,6 +42,7 @@
             <stringProp name="8">SessionId</stringProp>
             <stringProp name="9">PromoCode</stringProp>
             <stringProp name="10">SourceType</stringProp>
+            <stringProp name="11">ActionId</stringProp>
           </collectionProp>
           <collectionProp name="UserParameters.thread_values">
             <collectionProp name="0">
@@ -56,6 +57,7 @@
               <stringProp name="8">${__UUID()}</stringProp>
               <stringProp name="9"></stringProp>
               <stringProp name="10">np-TXUE</stringProp>
+              <stringProp name="11">${__UUID()}</stringProp>
             </collectionProp>
           </collectionProp>
           <boolProp name="UserParameters.per_iteration">true</boolProp>
@@ -94,7 +96,18 @@
   &quot;LoadDate&quot;: &quot;${LoadDate}&quot;,
   &quot;SessionId&quot;: &quot;${SessionId}&quot;,
   &quot;PromoCode&quot;: &quot;${PromoCode}&quot;,
-  &quot;SourceType&quot;: &quot;${SourceType}&quot;
+  &quot;SourceType&quot;: &quot;${SourceType}&quot;,
+  &quot;TDResponse_EmailStatus&quot;: &quot;Denied&quot;,
+  &quot;TDResponse_EmailStatusReason&quot;: &quot;FraudMatch&quot;,
+  &quot;TDResponse_EmailStatusMessage&quot;: &quot;Denied based on fraud expression: 505:.*|400:freeisp|.*:disposable&quot;,
+  &quot;TDResponse_EmailValidationResult&quot;: &quot;400:freeisp&quot;,
+  &quot;TDResponse_PhoneStatus&quot;: &quot;Verified&quot;,
+  &quot;TDResponse_PhoneStatusReason&quot;: null,
+  &quot;TDResponse_PhoneStatusMessage&quot;: null,
+  &quot;TDResponse_PhoneValidationResult&quot;: null,
+  &quot;TDResponse_ActionId&quot;: &quot;${ActionId}&quot;,
+  &quot;ConsultantId&quot;: null,
+  &quot;TDResponse_AtDataResponse&quot;: &quot;{\&quot;eam\&quot;: {\&quot;longevity\&quot;: \&quot;0\&quot;,\&quot;velocity\&quot;: 0,\&quot;popularity\&quot;: 0,\&quot;date_first_seen\&quot;: \&quot;now\&quot;},\&quot;dam\&quot;: {\&quot;longevity\&quot;: \&quot;3\&quot;,\&quot;velocity\&quot;: 10,\&quot;popularity\&quot;: 10,\&quot;date_first_seen\&quot;: \&quot;2002-11-09\&quot;},\&quot;risk\&quot;: {\&quot;score\&quot;: 97,\&quot;query_id\&quot;: \&quot;764d8628-724e-4181-8d86-28724e818130\&quot;,\&quot;tumbling_risk\&quot;: 0,\&quot;phone\&quot;: {\&quot;owner\&quot;: {\&quot;last_name_match\&quot;: \&quot;no_match\&quot;,\&quot;first_name_match\&quot;: \&quot;no_match\&quot;,\&quot;zip_match\&quot;: \&quot;no_data\&quot;,\&quot;type\&quot;: \&quot;Business\&quot;,\&quot;city_match\&quot;: \&quot;no_data\&quot;,\&quot;street_match\&quot;: \&quot;no_data\&quot;},\&quot;carrier\&quot;: \&quot;Bandwidth/Zipwhip - Toll-Free - SVR\&quot;,\&quot;line_type\&quot;: \&quot;toll_free\&quot;,\&quot;prepaid\&quot;: \&quot;false\&quot;,\&quot;status\&quot;: \&quot;valid\&quot;},\&quot;domain\&quot;: {\&quot;domain_risk_score\&quot;: 0},\&quot;gibberish\&quot;: {\&quot;gibberish_email\&quot;: \&quot;not gibberish\&quot;},\&quot;postal\&quot;: {\&quot;last_name_match\&quot;: \&quot;no_data\&quot;,\&quot;first_name_match\&quot;: \&quot;no_data\&quot;}},\&quot;email_validation\&quot;: {\&quot;status\&quot;: \&quot;invalid\&quot;,\&quot;status_code\&quot;: \&quot;400\&quot;,\&quot;address\&quot;: \&quot;${Email}\&quot;,\&quot;domain_type\&quot;: \&quot;freeisp\&quot;}}&quot;
 }</stringProp>
                   <stringProp name="Argument.metadata">=</stringProp>
                 </elementProp>
@@ -132,7 +145,18 @@
   &quot;LoadDate&quot;: &quot;${LoadDate}&quot;,
   &quot;SessionId&quot;: &quot;${SessionId}&quot;,
   &quot;PromoCode&quot;: &quot;${PromoCode}&quot;,
-  &quot;SourceType&quot;: &quot;${SourceType}&quot;
+  &quot;SourceType&quot;: &quot;${SourceType}&quot;,
+  &quot;TDResponse_EmailStatus&quot;: &quot;Denied&quot;,
+  &quot;TDResponse_EmailStatusReason&quot;: &quot;FraudMatch&quot;,
+  &quot;TDResponse_EmailStatusMessage&quot;: &quot;Denied based on fraud expression: 505:.*|400:freeisp|.*:disposable&quot;,
+  &quot;TDResponse_EmailValidationResult&quot;: &quot;400:freeisp&quot;,
+  &quot;TDResponse_PhoneStatus&quot;: &quot;Verified&quot;,
+  &quot;TDResponse_PhoneStatusReason&quot;: null,
+  &quot;TDResponse_PhoneStatusMessage&quot;: null,
+  &quot;TDResponse_PhoneValidationResult&quot;: null,
+  &quot;TDResponse_ActionId&quot;: &quot;${ActionId}&quot;,
+  &quot;ConsultantId&quot;: null,
+  &quot;TDResponse_AtDataResponse&quot;: &quot;{\&quot;eam\&quot;: {\&quot;longevity\&quot;: \&quot;0\&quot;,\&quot;velocity\&quot;: 0,\&quot;popularity\&quot;: 0,\&quot;date_first_seen\&quot;: \&quot;now\&quot;},\&quot;dam\&quot;: {\&quot;longevity\&quot;: \&quot;3\&quot;,\&quot;velocity\&quot;: 10,\&quot;popularity\&quot;: 10,\&quot;date_first_seen\&quot;: \&quot;2002-11-09\&quot;},\&quot;risk\&quot;: {\&quot;score\&quot;: 97,\&quot;query_id\&quot;: \&quot;764d8628-724e-4181-8d86-28724e818130\&quot;,\&quot;tumbling_risk\&quot;: 0,\&quot;phone\&quot;: {\&quot;owner\&quot;: {\&quot;last_name_match\&quot;: \&quot;no_match\&quot;,\&quot;first_name_match\&quot;: \&quot;no_match\&quot;,\&quot;zip_match\&quot;: \&quot;no_data\&quot;,\&quot;type\&quot;: \&quot;Business\&quot;,\&quot;city_match\&quot;: \&quot;no_data\&quot;,\&quot;street_match\&quot;: \&quot;no_data\&quot;},\&quot;carrier\&quot;: \&quot;Bandwidth/Zipwhip - Toll-Free - SVR\&quot;,\&quot;line_type\&quot;: \&quot;toll_free\&quot;,\&quot;prepaid\&quot;: \&quot;false\&quot;,\&quot;status\&quot;: \&quot;valid\&quot;},\&quot;domain\&quot;: {\&quot;domain_risk_score\&quot;: 0},\&quot;gibberish\&quot;: {\&quot;gibberish_email\&quot;: \&quot;not gibberish\&quot;},\&quot;postal\&quot;: {\&quot;last_name_match\&quot;: \&quot;no_data\&quot;,\&quot;first_name_match\&quot;: \&quot;no_data\&quot;}},\&quot;email_validation\&quot;: {\&quot;status\&quot;: \&quot;invalid\&quot;,\&quot;status_code\&quot;: \&quot;400\&quot;,\&quot;address\&quot;: \&quot;${Email}\&quot;,\&quot;domain_type\&quot;: \&quot;freeisp\&quot;}}&quot;
 }</stringProp>
                   <stringProp name="Argument.metadata">=</stringProp>
                 </elementProp>
