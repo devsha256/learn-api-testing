@@ -1,0 +1,175 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
+  <hashTree>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Boomi vs Mule Comparison" enabled="true">
+      <stringProp name="TestPlan.comments">Endpoints passed via -J properties: boomi.endpoint, mule.endpoint (e.g. -Jboomi.endpoint=api.boomi.example.com)</stringProp>
+      <boolProp name="TestPlan.functional_mode">false</boolProp>
+      <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="User Defined Variables">
+        <collectionProp name="Arguments.arguments"/>
+      </elementProp>
+      <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
+    </TestPlan>
+    <hashTree>
+
+      <!-- ================= THREAD GROUP ================= -->
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Load - 10 Users" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Loop Controller">
+          <boolProp name="LoopController.continue_forever">true</boolProp>
+          <stringProp name="LoopController.loops">-1</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">10</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">40</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">1840</stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </ThreadGroup>
+      <hashTree>
+
+        <!-- ============ DYNAMIC DATA (per iteration) ============ -->
+        <UserParameters guiclass="UserParametersGui" testclass="UserParameters" testname="Dynamic Payload Fields" enabled="true">
+          <collectionProp name="UserParameters.names">
+            <stringProp>Email</stringProp>
+            <stringProp>PhoneNumber</stringProp>
+            <stringProp>FirstName</stringProp>
+            <stringProp>LastName</stringProp>
+            <stringProp>Premise</stringProp>
+            <stringProp>DwellingType</stringProp>
+            <stringProp>Intent</stringProp>
+            <stringProp>LoadDate</stringProp>
+            <stringProp>SessionId</stringProp>
+            <stringProp>PromoCode</stringProp>
+            <stringProp>SourceType</stringProp>
+          </collectionProp>
+          <collectionProp name="UserParameters.thread_values">
+            <collectionProp>
+              <stringProp>TEST${__Random(10000000,99999999)}@GMAIL.COM</stringProp>
+              <stringProp>${__Random(2000000000,9999999999)}</stringProp>
+              <stringProp>${__RandomString(6,ABCDEFGHIJKLMNOPQRSTUVWXYZ,)}</stringProp>
+              <stringProp>${__RandomString(8,ABCDEFGHIJKLMNOPQRSTUVWXYZ,)}</stringProp>
+              <stringProp>${__Random(10000000000,99999999999)}${__Random(1000000000,9999999999)}</stringProp>
+              <stringProp></stringProp>
+              <stringProp></stringProp>
+              <stringProp>${__time(yyyyMMdd HHmmss,)}</stringProp>
+              <stringProp>${__UUID()}</stringProp>
+              <stringProp></stringProp>
+              <stringProp>np-TXUE</stringProp>
+            </collectionProp>
+          </collectionProp>
+          <boolProp name="UserParameters.per_iteration">true</boolProp>
+        </UserParameters>
+        <hashTree/>
+
+        <HeaderManager guiclass="HeaderPanel" testclass="HeaderManager" testname="Content-Type Header" enabled="true">
+          <collectionProp name="HeaderManager.headers">
+            <elementProp name="" elementType="Header">
+              <stringProp name="Header.name">Content-Type</stringProp>
+              <stringProp name="Header.value">application/json</stringProp>
+            </elementProp>
+          </collectionProp>
+        </HeaderManager>
+        <hashTree/>
+
+        <!-- ================= BOOMI TRANSACTION ================= -->
+        <TransactionController guiclass="TransactionControllerGui" testclass="TransactionController" testname="Boomi_API" enabled="true">
+          <boolProp name="TransactionController.includeTimers">false</boolProp>
+        </TransactionController>
+        <hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Boomi Request" enabled="true">
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{
+  &quot;Email&quot;: &quot;${Email}&quot;,
+  &quot;PhoneNumber&quot;: &quot;${PhoneNumber}&quot;,
+  &quot;FirstName&quot;: &quot;${FirstName}&quot;,
+  &quot;LastName&quot;: &quot;${LastName}&quot;,
+  &quot;Premise&quot;: &quot;${Premise}&quot;,
+  &quot;DwellingType&quot;: &quot;${DwellingType}&quot;,
+  &quot;Intent&quot;: &quot;${Intent}&quot;,
+  &quot;LoadDate&quot;: &quot;${LoadDate}&quot;,
+  &quot;SessionId&quot;: &quot;${SessionId}&quot;,
+  &quot;PromoCode&quot;: &quot;${PromoCode}&quot;,
+  &quot;SourceType&quot;: &quot;${SourceType}&quot;
+}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <stringProp name="HTTPSampler.domain">${__P(boomi.host,)}</stringProp>
+            <stringProp name="HTTPSampler.protocol">${__P(boomi.protocol,https)}</stringProp>
+            <stringProp name="HTTPSampler.path">${__P(boomi.path,/)}</stringProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ================= MULE TRANSACTION ================= -->
+        <TransactionController guiclass="TransactionControllerGui" testclass="TransactionController" testname="Mule_API" enabled="true">
+          <boolProp name="TransactionController.includeTimers">false</boolProp>
+        </TransactionController>
+        <hashTree>
+          <HTTPSamplerProxy guiclass="HttpTestSampleGui" testclass="HTTPSamplerProxy" testname="Mule Request" enabled="true">
+            <boolProp name="HTTPSampler.postBodyRaw">true</boolProp>
+            <elementProp name="HTTPsampler.Arguments" elementType="Arguments">
+              <collectionProp name="Arguments.arguments">
+                <elementProp name="" elementType="HTTPArgument">
+                  <boolProp name="HTTPArgument.always_encode">false</boolProp>
+                  <stringProp name="Argument.value">{
+  &quot;Email&quot;: &quot;${Email}&quot;,
+  &quot;PhoneNumber&quot;: &quot;${PhoneNumber}&quot;,
+  &quot;FirstName&quot;: &quot;${FirstName}&quot;,
+  &quot;LastName&quot;: &quot;${LastName}&quot;,
+  &quot;Premise&quot;: &quot;${Premise}&quot;,
+  &quot;DwellingType&quot;: &quot;${DwellingType}&quot;,
+  &quot;Intent&quot;: &quot;${Intent}&quot;,
+  &quot;LoadDate&quot;: &quot;${LoadDate}&quot;,
+  &quot;SessionId&quot;: &quot;${SessionId}&quot;,
+  &quot;PromoCode&quot;: &quot;${PromoCode}&quot;,
+  &quot;SourceType&quot;: &quot;${SourceType}&quot;
+}</stringProp>
+                  <stringProp name="Argument.metadata">=</stringProp>
+                </elementProp>
+              </collectionProp>
+            </elementProp>
+            <stringProp name="HTTPSampler.domain">${__P(mule.host,)}</stringProp>
+            <stringProp name="HTTPSampler.protocol">${__P(mule.protocol,https)}</stringProp>
+            <stringProp name="HTTPSampler.path">${__P(mule.path,/)}</stringProp>
+            <stringProp name="HTTPSampler.method">POST</stringProp>
+            <boolProp name="HTTPSampler.follow_redirects">true</boolProp>
+            <boolProp name="HTTPSampler.use_keepalive">true</boolProp>
+          </HTTPSamplerProxy>
+          <hashTree/>
+        </hashTree>
+
+        <!-- ================= LISTENERS ================= -->
+        <ResultCollector guiclass="StatVisualizer" testclass="ResultCollector" testname="Aggregate Report" enabled="true">
+          <boolProp name="ResultCollector.error_logging">false</boolProp>
+          <objProp>
+            <name>saveConfig</name>
+            <value class="SampleSaveConfiguration">
+              <time>true</time><latency>true</latency><timestamp>true</timestamp>
+              <success>true</success><label>true</label><code>true</code>
+              <message>true</message><threadName>true</threadName><dataType>true</dataType>
+              <encoding>false</encoding><assertions>true</assertions><subresults>true</subresults>
+              <responseData>false</responseData><samplerData>false</samplerData>
+              <xml>false</xml><fieldNames>true</fieldNames><responseHeaders>false</responseHeaders>
+              <requestHeaders>false</requestHeaders><responseDataOnError>false</responseDataOnError>
+              <saveAssertionResultsFailureMessage>true</saveAssertionResultsFailureMessage>
+              <assertionsResultsToSave>0</assertionsResultsToSave><bytes>true</bytes><threadCounts>true</threadCounts>
+            </value>
+          </objProp>
+          <stringProp name="filename">results/aggregate_results.jtl</stringProp>
+        </ResultCollector>
+        <hashTree/>
+
+      </hashTree>
+    </hashTree>
+  </hashTree>
+</jmeterTestPlan>
