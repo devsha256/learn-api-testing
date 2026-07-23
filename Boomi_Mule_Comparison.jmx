@@ -31,31 +31,31 @@
         <!-- ============ DYNAMIC DATA (per iteration) ============ -->
         <UserParameters guiclass="UserParametersGui" testclass="UserParameters" testname="Dynamic Payload Fields" enabled="true">
           <collectionProp name="UserParameters.names">
-            <stringProp>Email</stringProp>
-            <stringProp>PhoneNumber</stringProp>
-            <stringProp>FirstName</stringProp>
-            <stringProp>LastName</stringProp>
-            <stringProp>Premise</stringProp>
-            <stringProp>DwellingType</stringProp>
-            <stringProp>Intent</stringProp>
-            <stringProp>LoadDate</stringProp>
-            <stringProp>SessionId</stringProp>
-            <stringProp>PromoCode</stringProp>
-            <stringProp>SourceType</stringProp>
+            <stringProp name="0">Email</stringProp>
+            <stringProp name="1">PhoneNumber</stringProp>
+            <stringProp name="2">FirstName</stringProp>
+            <stringProp name="3">LastName</stringProp>
+            <stringProp name="4">Premise</stringProp>
+            <stringProp name="5">DwellingType</stringProp>
+            <stringProp name="6">Intent</stringProp>
+            <stringProp name="7">LoadDate</stringProp>
+            <stringProp name="8">SessionId</stringProp>
+            <stringProp name="9">PromoCode</stringProp>
+            <stringProp name="10">SourceType</stringProp>
           </collectionProp>
           <collectionProp name="UserParameters.thread_values">
-            <collectionProp>
-              <stringProp>TEST${__Random(10000000,99999999)}@GMAIL.COM</stringProp>
-              <stringProp>${__Random(2000000000,9999999999)}</stringProp>
-              <stringProp>${__RandomString(6,ABCDEFGHIJKLMNOPQRSTUVWXYZ,)}</stringProp>
-              <stringProp>${__RandomString(8,ABCDEFGHIJKLMNOPQRSTUVWXYZ,)}</stringProp>
-              <stringProp>${__Random(10000000000,99999999999)}${__Random(1000000000,9999999999)}</stringProp>
-              <stringProp></stringProp>
-              <stringProp></stringProp>
-              <stringProp>${__time(yyyyMMdd HHmmss,)}</stringProp>
-              <stringProp>${__UUID()}</stringProp>
-              <stringProp></stringProp>
-              <stringProp>np-TXUE</stringProp>
+            <collectionProp name="0">
+              <stringProp name="0">TEST${__Random(10000000,99999999)}@GMAIL.COM</stringProp>
+              <stringProp name="1">${__Random(2000000000,9999999999)}</stringProp>
+              <stringProp name="2">${__RandomString(6,ABCDEFGHIJKLMNOPQRSTUVWXYZ,)}</stringProp>
+              <stringProp name="3">${__RandomString(8,ABCDEFGHIJKLMNOPQRSTUVWXYZ,)}</stringProp>
+              <stringProp name="4">${__Random(10000000000,99999999999)}${__Random(1000000000,9999999999)}</stringProp>
+              <stringProp name="5"></stringProp>
+              <stringProp name="6"></stringProp>
+              <stringProp name="7">${__time(yyyyMMdd HHmmss,)}</stringProp>
+              <stringProp name="8">${__UUID()}</stringProp>
+              <stringProp name="9"></stringProp>
+              <stringProp name="10">np-TXUE</stringProp>
             </collectionProp>
           </collectionProp>
           <boolProp name="UserParameters.per_iteration">true</boolProp>
